@@ -30,6 +30,7 @@
 #include <esp_netif_ip_addr.h>
 #include <lwip/lwip_napt.h>
 #include <esp_mac.h>
+#include <esp_timer.h>
 #include "wifi.h"
 #include "config.h"
 
@@ -60,6 +61,12 @@ static wifi_sta_list_t ap_sta_list;
 
 static esp_netif_t *esp_netif_ap;
 static esp_netif_t *esp_netif_sta;
+
+#define WIFI_AP_AUTO_DISABLE_DELAY_US (5 * 60 * 1000 * 1000LL) // 5 minutes
+
+static esp_timer_handle_t ap_disable_timer;
+static bool apsta_auto_disable_enabled = false; // true only if booted with both AP+STA active
+static bool ap_auto_disabled = false; // true while AP is off due to this feature
 
 static void wifi_sta_status_task(void *ctx) {
     uint8_t rssi_duty = 0;
@@ -92,6 +99,53 @@ static void wifi_sta_reconnect_task(void *ctx) {
         // Wait for next disconnect event
         vTaskSuspend(NULL);
     }
+}
+
+static void ap_disable_timer_callback(void *arg) {
+    if (!apsta_auto_disable_enabled) return;
+    if (!sta_connected) return; // STA disconnected in the brief window before the timer fired
+    if (!ap_active) return; // already off
+
+    wifi_ap_sta_list();
+    if (ap_sta_list.num > 0) {
+        // Clients are on the AP right now — defer and check again later instead of kicking them off
+        ESP_LOGI(TAG, "WIFI_AP_AUTO_DISABLE: %d client(s) connected to AP, deferring", ap_sta_list.num);
+        esp_timer_start_once(ap_disable_timer, WIFI_AP_AUTO_DISABLE_DELAY_US);
+        return;
+    }
+
+    ESP_LOGI(TAG, "WIFI_AP_AUTO_DISABLE: disabling AP, STA is connected");
+    uart_nmea("$PESP,WIFI,AP,AUTO_DISABLED");
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    ap_auto_disabled = true;
+}
+
+static void schedule_ap_auto_disable() {
+    if (!apsta_auto_disable_enabled) return;
+    if (ap_auto_disabled) return; // AP already off; nothing to (re)schedule until STA disconnects
+
+    if (esp_timer_is_active(ap_disable_timer)) esp_timer_stop(ap_disable_timer);
+    esp_timer_start_once(ap_disable_timer, WIFI_AP_AUTO_DISABLE_DELAY_US);
+}
+
+static void cancel_ap_disable_timer() {
+    if (!apsta_auto_disable_enabled) return;
+
+    if (esp_timer_is_active(ap_disable_timer)) esp_timer_stop(ap_disable_timer);
+}
+
+static void reenable_ap_if_auto_disabled() {
+    if (!apsta_auto_disable_enabled) return;
+    if (!ap_auto_disabled) return;
+
+    ESP_LOGI(TAG, "WIFI_AP_AUTO_ENABLE: re-enabling AP, STA no longer connected");
+    uart_nmea("$PESP,WIFI,AP,AUTO_ENABLED");
+
+    esp_wifi_set_config(WIFI_IF_AP, &config_ap);
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+    ap_auto_disabled = false;
 }
 
 static void handle_sta_start(void *esp_netif, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -161,6 +215,9 @@ static void handle_sta_disconnected(void *esp_netif, esp_event_base_t base, int3
 
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV6_BIT);
+
+    cancel_ap_disable_timer();
+    reenable_ap_if_auto_disabled();
 
     if (status_led_sta != NULL) status_led_sta->flashing_mode = STATUS_LED_STATIC;
 }
@@ -241,6 +298,8 @@ static void handle_sta_got_ip(void *esp_netif, esp_event_base_t base, int32_t ev
             IP2STR(&event->ip_info.gw));
 
     xEventGroupSetBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
+
+    schedule_ap_auto_disable();
 }
 
 static void handle_sta_lost_ip(void *esp_netif, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -248,6 +307,9 @@ static void handle_sta_lost_ip(void *esp_netif, esp_event_base_t base, int32_t e
     uart_nmea("$PESP,WIFI,STA,IP_LOST");
 
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
+
+    cancel_ap_disable_timer();
+    reenable_ap_if_auto_disabled();
 }
 
 static void handle_ap_sta_ip_assigned(void *esp_netif, esp_event_base_t base, int32_t event_id, void *event_data) {
@@ -347,12 +409,21 @@ void wifi_init() {
     wifi_mode_t wifi_mode;
     if (sta_enable && ap_enable) {
         wifi_mode = WIFI_MODE_APSTA;
+        apsta_auto_disable_enabled = true;
     } else if (ap_enable) {
         wifi_mode = WIFI_MODE_AP;
     } else if (sta_enable) {
         wifi_mode = WIFI_MODE_STA;
     } else {
         return;
+    }
+
+    if (apsta_auto_disable_enabled) {
+        const esp_timer_create_args_t ap_disable_timer_args = {
+                .callback = &ap_disable_timer_callback,
+                .name = "wifi_ap_disable"
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&ap_disable_timer_args, &ap_disable_timer));
     }
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(wifi_mode));

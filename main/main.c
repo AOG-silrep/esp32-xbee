@@ -126,6 +126,8 @@ void app_main()
 
     web_server_init();
 
+    esp_ota_mark_app_valid_cancel_rollback();
+
     ntrip_caster_init();
     ntrip_server_init();
     ntrip_client_init();

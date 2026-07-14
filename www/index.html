@@ -113,6 +113,46 @@
                 form.addClass('was-validated');
             });
 
+            $('#ota-form').on('submit', function(e) {
+                e.preventDefault();
+
+                var file = $('#ota-file')[0].files[0];
+                if (!file) return;
+
+                var submit = $('#ota-submit').prop('disabled', true);
+                var progress = $('#ota-progress').show();
+                var progressBar = $('#ota-progress-bar').css('width', '0');
+                var error = $('#ota-error').hide();
+
+                var xhr = new XMLHttpRequest();
+                xhr.upload.addEventListener('progress', function(evt) {
+                    if (evt.lengthComputable) {
+                        progressBar.css('width', (evt.loaded / evt.total * 100) + '%');
+                    }
+                });
+                xhr.addEventListener('load', function() {
+                    submit.prop('disabled', false);
+
+                    if (xhr.status === 200) {
+                        $('#restarting-modal').modal('show');
+
+                        setTimeout(function() {
+                            reloadOnStatus = true;
+                        }, 2500);
+                    } else {
+                        error.text('Update failed: ' + xhr.responseText).show();
+                        progress.hide();
+                    }
+                });
+                xhr.addEventListener('error', function() {
+                    submit.prop('disabled', false);
+                    error.text('Update failed: connection error').show();
+                    progress.hide();
+                });
+                xhr.open('POST', 'ota');
+                xhr.send(file);
+            });
+
             form.find("input[type='checkbox']").each(function() {
                 var self = $(this);
                 var hidden = $("<input>")
@@ -1171,6 +1211,31 @@
                 </div>
             </div>
         </form>
+        <div class="row mb-1">
+            <div class="col-xl-6">
+                <form id="ota-form">
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            Firmware update
+                        </div>
+                        <div class="card-body">
+                            <div class="form-row mb-3">
+                                <div class="col">
+                                    <input type="file" name="ota_file" id="ota-file" class="form-control-file" accept=".bin" required>
+                                </div>
+                                <div class="col-auto">
+                                    <button type="submit" class="btn btn-primary" id="ota-submit">Update</button>
+                                </div>
+                            </div>
+                            <div class="progress" id="ota-progress" style="display: none">
+                                <div class="progress-bar" role="progressbar" id="ota-progress-bar" style="width: 0"></div>
+                            </div>
+                            <div id="ota-error" class="text-danger small mt-2" style="display: none"></div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
     <footer id="footer" class="bg-dark">
         <div class="container">

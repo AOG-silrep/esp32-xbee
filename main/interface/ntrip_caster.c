@@ -19,7 +19,6 @@
 #include <esp_log.h>
 #include <esp_event_base.h>
 #include <sys/socket.h>
-#include <mdns.h>
 #include <tasks.h>
 #include <status_led.h>
 #include <stream_stats.h>
@@ -124,7 +123,7 @@ static void ntrip_caster_task(void *ctx) {
             destroy_socket(&sock_client);
 
             struct sockaddr_in6 source_addr;
-            size_t addr_len = sizeof(source_addr);
+            socklen_t addr_len = sizeof(source_addr);
             sock_client = accept(sock, (struct sockaddr *)&source_addr, &addr_len);
             ERROR_ACTION(TAG, sock_client < 0, goto _error, "Could not accept connection: %d %s", errno, strerror(errno))
 
@@ -186,7 +185,7 @@ static void ntrip_caster_task(void *ctx) {
                         NEWLINE \
                         "%s",
                         ntrip_agent ? "SOURCETABLE" : "HTTP/1.0",
-                        NTRIP_CASTER_NAME, &esp_ota_get_app_description()->version[1],
+                        NTRIP_CASTER_NAME, &esp_app_get_description()->version[1],
                         strlen(stream), stream);
 
                 int err = write(sock_client, buffer, strlen(buffer));

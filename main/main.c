@@ -84,9 +84,9 @@ void app_main()
 
     esp_reset_reason_t reset_reason = esp_reset_reason();
 
-    const esp_app_desc_t *app_desc = esp_ota_get_app_description();
+    const esp_app_desc_t *app_desc = esp_app_get_description();
     char elf_buffer[17];
-    esp_ota_get_app_elf_sha256(elf_buffer, sizeof(elf_buffer));
+    esp_app_get_elf_sha256(elf_buffer, sizeof(elf_buffer));
 
     uart_nmea("$PESP,INIT,START,%s,%s", app_desc->version, reset_reason_name(reset_reason));
 

@@ -17,6 +17,9 @@
 
 #include <esp_http_server.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/idf_additions.h>
 #include <wifi.h>
 #include <cJSON.h>
 #include <sys/param.h>
@@ -613,6 +616,36 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     return json_response(req, root);
 }
 
+// Computes each core's CPU load (%) since the previous call, based on the change in time
+// each core's idle task spent running relative to the elapsed wall clock time.
+static void cpu_load_get(float loads[portNUM_PROCESSORS]) {
+    static bool initialized = false;
+    static int64_t prev_time = 0;
+    static configRUN_TIME_COUNTER_TYPE prev_idle[portNUM_PROCESSORS];
+
+    int64_t time = esp_timer_get_time();
+    configRUN_TIME_COUNTER_TYPE idle[portNUM_PROCESSORS];
+    for (int core = 0; core < portNUM_PROCESSORS; core++) {
+        idle[core] = ulTaskGetIdleRunTimeCounterForCore(core);
+    }
+
+    int64_t delta_time = time - prev_time;
+
+    for (int core = 0; core < portNUM_PROCESSORS; core++) {
+        if (initialized && delta_time > 0) {
+            configRUN_TIME_COUNTER_TYPE delta_idle = idle[core] - prev_idle[core];
+            loads[core] = 100.0f - MIN(100.0f, (float) delta_idle * 100.0f / (float) delta_time);
+        } else {
+            loads[core] = 0;
+        }
+
+        prev_idle[core] = idle[core];
+    }
+
+    prev_time = time;
+    initialized = true;
+}
+
 static esp_err_t status_get_handler(httpd_req_t *req) {
     if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
 
@@ -625,6 +658,14 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
     cJSON *heap = cJSON_AddObjectToObject(root, "heap");
     cJSON_AddNumberToObject(heap, "total", heap_caps_get_total_size(MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(heap, "free", heap_caps_get_free_size(MALLOC_CAP_8BIT));
+
+    // CPU load
+    float cpu_loads[portNUM_PROCESSORS];
+    cpu_load_get(cpu_loads);
+    cJSON *cpu_load = cJSON_AddArrayToObject(root, "cpu_load");
+    for (int core = 0; core < portNUM_PROCESSORS; core++) {
+        cJSON_AddItemToArray(cpu_load, cJSON_CreateNumber(cpu_loads[core]));
+    }
 
     // Streams
     cJSON *streams = cJSON_AddObjectToObject(root, "streams");

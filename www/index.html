@@ -113,9 +113,7 @@
                 form.addClass('was-validated');
             });
 
-            $('#ota-form').on('submit', function(e) {
-                e.preventDefault();
-
+            $('#ota-submit').on('click', function() {
                 var file = $('#ota-file')[0].files[0];
                 if (!file) return;
 
@@ -297,8 +295,19 @@
                 }
             };
 
-            var deviceUptimeText = $('footer .uptime');
-            var deviceHeapText = $('footer .heap');
+            var cpuLoadColorClass = function(load) {
+                if (load < 50) {
+                    return 'success';
+                } else if (load < 80) {
+                    return 'warning';
+                } else {
+                    return 'danger';
+                }
+            };
+
+            var deviceUptimeText = $('.uptime');
+            var deviceHeapText = $('.heap');
+            var cpuLoadRows = $('.cpu-load-row');
 
             var wifiApStatusText = form.find('.wifi-ap-status');
             var wifiApStatusActiveInput = form.find('#status-wifi-ap-active');
@@ -345,6 +354,20 @@
 
                     // Heap
                     deviceHeapText.text(Math.round(data.heap.free / data.heap.total * 100) + "% free");
+
+                    // CPU load
+                    cpuLoadRows.each(function() {
+                        const core = $(this).data('core');
+                        if (typeof data.cpu_load[core] === 'undefined') return;
+
+                        const load = Math.round(data.cpu_load[core]);
+                        const bar = $(this).find('.cpu-load');
+
+                        bar.css('width', load + '%')
+                            .text(load + '%')
+                            .removeClass('bg-success bg-warning bg-danger')
+                            .addClass('bg-' + cpuLoadColorClass(load));
+                    });
 
                     // Streams
                     streamStatsTexts.each(function() {
@@ -1139,6 +1162,27 @@
                             </div>
                         </div>
                     </div>
+                    <div id="ota-form">
+                        <div class="card mb-3">
+                            <div class="card-header">
+                                Firmware update
+                            </div>
+                            <div class="card-body">
+                                <div class="form-row mb-3">
+                                    <div class="col">
+                                        <input type="file" name="ota_file" id="ota-file" class="form-control-file" accept=".bin">
+                                    </div>
+                                    <div class="col-auto">
+                                        <button type="button" class="btn btn-primary" id="ota-submit">Update</button>
+                                    </div>
+                                </div>
+                                <div class="progress" id="ota-progress" style="display: none">
+                                    <div class="progress-bar" role="progressbar" id="ota-progress-bar" style="width: 0"></div>
+                                </div>
+                                <div id="ota-error" class="text-danger small mt-2" style="display: none"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="col-xl-6">
                     <div class="card mb-3">
@@ -1212,49 +1256,59 @@
                             </div>
                         </div>
                     </div>
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            System
+                        </div>
+                        <div class="card-body">
+                            <div class="form-row mb-2 align-items-center cpu-load-row" data-core="0">
+                                <div class="col-auto">
+                                    <label class="mb-0">CPU core 0</label>
+                                </div>
+                                <div class="col">
+                                    <div class="progress">
+                                        <div class="progress-bar cpu-load" role="progressbar" style="width: 0%">0%</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-row mb-3 align-items-center cpu-load-row" data-core="1">
+                                <div class="col-auto">
+                                    <label class="mb-0">CPU core 1</label>
+                                </div>
+                                <div class="col">
+                                    <div class="progress">
+                                        <div class="progress-bar cpu-load" role="progressbar" style="width: 0%">0%</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="col-6">
+                                    <label class="mb-0">Uptime</label>
+                                    <div class="uptime">loading...</div>
+                                </div>
+                                <div class="col-6">
+                                    <label class="mb-0">Heap</label>
+                                    <div class="heap">loading...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            Log
+                        </div>
+                        <div class="card-body">
+                            <a href="log.html" class="btn btn-primary">View log</a>
+                        </div>
+                    </div>
                 </div>
             </div>
         </form>
-        <div class="row mb-1">
-            <div class="col-xl-6">
-                <form id="ota-form">
-                    <div class="card mb-3">
-                        <div class="card-header">
-                            Firmware update
-                        </div>
-                        <div class="card-body">
-                            <div class="form-row mb-3">
-                                <div class="col">
-                                    <input type="file" name="ota_file" id="ota-file" class="form-control-file" accept=".bin" required>
-                                </div>
-                                <div class="col-auto">
-                                    <button type="submit" class="btn btn-primary" id="ota-submit">Update</button>
-                                </div>
-                            </div>
-                            <div class="progress" id="ota-progress" style="display: none">
-                                <div class="progress-bar" role="progressbar" id="ota-progress-bar" style="width: 0"></div>
-                            </div>
-                            <div id="ota-error" class="text-danger small mt-2" style="display: none"></div>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="col-xl-6">
-                <div class="card mb-3">
-                    <div class="card-header">
-                        Log
-                    </div>
-                    <div class="card-body">
-                        <a href="log.html" class="btn btn-primary">View log</a>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
     <footer id="footer" class="bg-dark">
         <div class="container">
             <div class="text-center text-light">
-                <small>&copy; <a href="http://cvetkovic.ie" class="text-white">Neboj&#353;a Cvetkovi&#263;</a> 2020 - <a href="https://github.com/nebkat" class="text-white">GitHub</a> - <a href="https://github.com/nebkat/esp32-xbee" class="text-white">Project</a> - Uptime <span class="uptime">loading...</span> - Heap <span class="heap">loading...</span></small>
+                <small>&copy; <a href="http://cvetkovic.ie" class="text-white">Neboj&#353;a Cvetkovi&#263;</a> 2020 - <a href="https://github.com/nebkat" class="text-white">GitHub</a> - <a href="https://github.com/nebkat/esp32-xbee" class="text-white">Project</a></small>
             </div>
         </div>
     </footer>

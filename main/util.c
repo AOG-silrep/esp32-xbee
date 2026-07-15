@@ -18,11 +18,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <mbedtls/base64.h>
 #include <sys/socket.h>
 #include <lwip/netdb.h>
+#include <esp_log.h>
 
 #include "util.h"
+
+static const char *TAG = "UTIL";
 
 void destroy_socket(int *socket) {
     if (*socket < 0) return;
@@ -127,6 +131,8 @@ int connect_socket(char *host, int port, int socktype) {
         if (sock < 0) continue;
 
         if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) == 0) break;
+
+        ESP_LOGE(TAG, "connect() to %s failed: errno %d (%s)", sockaddrtostr(addr_result->ai_addr), errno, strerror(errno));
 
         close(sock);
 

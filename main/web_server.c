@@ -678,6 +678,7 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
 
     cJSON *ap = cJSON_AddObjectToObject(wifi, "ap");
     cJSON_AddBoolToObject(ap, "active", ap_status.active);
+    cJSON_AddBoolToObject(ap, "auto_disabled", ap_status.auto_disabled);
     if (ap_status.active) {
         cJSON_AddStringToObject(ap, "ssid", (char *) ap_status.ssid);
         cJSON_AddStringToObject(ap, "authmode", wifi_auth_mode_name(ap_status.authmode));

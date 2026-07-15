@@ -5,6 +5,7 @@
 
 typedef struct wifi_ap_status {
     bool active;
+    bool auto_disabled;
 
     char ssid[33];
     wifi_auth_mode_t authmode;

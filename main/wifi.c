@@ -527,6 +527,7 @@ wifi_sta_list_t *wifi_ap_sta_list() {
 
 void wifi_ap_status(wifi_ap_status_t *status) {
     status->active = ap_active;
+    status->auto_disabled = ap_auto_disabled;
     if (!ap_active) return;
 
     memcpy(status->ssid, config_ap.ap.ssid, sizeof(config_ap.ap.ssid));

@@ -301,6 +301,7 @@
             var deviceHeapText = $('footer .heap');
 
             var wifiApStatusText = form.find('.wifi-ap-status');
+            var wifiApStatusActiveInput = form.find('#status-wifi-ap-active');
             var wifiStaStatusText = form.find('.wifi-sta-status');
 
             var streamStatsTexts = form.find('.stream-stats');
@@ -369,7 +370,7 @@
                     wifiStaStatusText.empty();
 
                     if (!wifi.ap.active) {
-                        wifiApStatusText.text("Disabled");
+                        wifiApStatusText.text(wifi.ap.auto_disabled ? "Timeout - no clients" : "Disabled");
                     } else {
                         wifiApStatusText.appendText(wifi.ap.ssid + (wifi.ap.authmode == 'OPEN' ? " (OPEN)" : ''))
                             .appendText(" / ")
@@ -377,6 +378,8 @@
                             .appendText(" / ")
                             .appendText(wifi.ap.devices + " device" + (wifi.ap.devices != 1 ? "s" : ''));
                     }
+                    wifiApStatusActiveInput.prop('checked', wifi.ap.active);
+                    checkDisableIfs();
 
                     if (!wifi.sta.active) {
                         wifiStaStatusText.text("Not Active");
@@ -770,11 +773,12 @@
                                 <input type="checkbox" name="w_ap_active" value="1" checked class="custom-control-input" id="switch-wifi-ap">
                                 <label class="custom-control-label" for="switch-wifi-ap"></label>
                             </div>
+                            <input type="checkbox" id="status-wifi-ap-active" checked class="d-none">
                             <div class="d-inline mr-1 float-right">
                                 <input type="color" name="w_ap_color" data-disable-if="#switch-wifi-ap" value="#ffffff" id="color-wifi-ap">
                             </div>
                         </div>
-                        <div class="card-body" data-disable-if="#switch-wifi-ap">
+                        <div class="card-body" data-disable-if="#switch-wifi-ap, #status-wifi-ap-active">
                             <div class="form-row mb-3">
                                 <div class="col-6">
                                     <label>SSID</label>

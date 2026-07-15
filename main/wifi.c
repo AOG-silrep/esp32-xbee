@@ -31,6 +31,7 @@
 #include <lwip/lwip_napt.h>
 #include <esp_mac.h>
 #include <esp_timer.h>
+#include <mdns.h>
 #include "wifi.h"
 #include "config.h"
 
@@ -277,24 +278,6 @@ static void handle_ap_sta_disconnected(void *esp_netif, esp_event_base_t base, i
 
 static void handle_sta_got_ip(void *esp_netif, esp_event_base_t base, int32_t event_id, void *event_data) {
     const ip_event_got_ip_t *event = (const ip_event_got_ip_t *) event_data;
-    esp_netif_ip_info_t ip_info_sta = event->ip_info;
-
-    // In DHCP mode, keep the DHCP-served netmask/gateway/DNS, but force the host
-    // address to a fixed, predictable .81 on whatever network is joined.
-    if (!config_get_bool1(CONF_ITEM(KEY_CONFIG_WIFI_STA_STATIC))) {
-        uint32_t fixed_ip = esp_netif_htonl(esp_netif_ip4_makeu32(
-                esp_ip4_addr_get_byte(&ip_info_sta.ip, 0),
-                esp_ip4_addr_get_byte(&ip_info_sta.ip, 1),
-                esp_ip4_addr_get_byte(&ip_info_sta.ip, 2),
-                81));
-
-        if (ip_info_sta.ip.addr != fixed_ip) {
-            ip_info_sta.ip.addr = fixed_ip;
-
-            ESP_ERROR_CHECK(esp_netif_dhcpc_stop(esp_netif_sta));
-            ESP_ERROR_CHECK(esp_netif_set_ip_info(esp_netif_sta, &ip_info_sta));
-        }
-    }
 
     // IP forwarding/NATP update AP DHCPS DNS info
     if (ap_active & config_get_bool1(CONF_ITEM(KEY_CONFIG_WIFI_STA_AP_FORWARD))) {
@@ -307,13 +290,13 @@ static void handle_sta_got_ip(void *esp_netif, esp_event_base_t base, int32_t ev
     }
 
     ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP: ip: " IPSTR "/%d, gw: " IPSTR,
-            IP2STR(&ip_info_sta.ip),
-            ffs(~ip_info_sta.netmask.addr) - 1,
-            IP2STR(&ip_info_sta.gw));
+            IP2STR(&event->ip_info.ip),
+            ffs(~event->ip_info.netmask.addr) - 1,
+            IP2STR(&event->ip_info.gw));
     uart_nmea("$PESP,WIFI,STA,IP," IPSTR "/%d," IPSTR,
-            IP2STR(&ip_info_sta.ip),
-            ffs(~ip_info_sta.netmask.addr) - 1,
-            IP2STR(&ip_info_sta.gw));
+            IP2STR(&event->ip_info.ip),
+            ffs(~event->ip_info.netmask.addr) - 1,
+            IP2STR(&event->ip_info.gw));
 
     xEventGroupSetBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
 
@@ -347,6 +330,11 @@ void wait_for_network() {
 
 void net_init() {
     esp_netif_init();
+
+    ESP_ERROR_CHECK(mdns_init());
+    ESP_ERROR_CHECK(mdns_hostname_set("ntrip"));
+    ESP_ERROR_CHECK(mdns_instance_name_set("ESP32 NTRIP"));
+    ESP_ERROR_CHECK(mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0));
 
     // SoftAP
     bool ap_enable = config_get_bool1(CONF_ITEM(KEY_CONFIG_WIFI_AP_ACTIVE));

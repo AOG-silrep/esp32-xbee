@@ -16,3 +16,4 @@ build
 sdkconfig.old
 .idea/
 .vscode/
+/managed_components

@@ -47,6 +47,11 @@ static SLIST_HEAD(status_led_color_list_t, status_led_color_t) status_led_colors
 
 static TaskHandle_t led_task;
 
+// ledc_fade_start()/ledc_set_fade_with_time() are not thread-safe (see ESP-IDF LEDC docs) and
+// are called from both status_led_task and other tasks (e.g. wifi_sta_status_task via rssi_led_fade),
+// so all LEDC channel access must be serialized to avoid corrupting the driver's shared fade state.
+static SemaphoreHandle_t ledc_mutex;
+
 void status_led_clear() {
 
 }
@@ -92,8 +97,10 @@ void status_led_remove(status_led_handle_t color) {
 }
 
 static void status_led_channel_set(ledc_channel_t channel, uint8_t value) {
+    xSemaphoreTake(ledc_mutex, portMAX_DELAY);
     ledc_set_duty(LEDC_SPEED_MODE, channel, value);
     ledc_update_duty(LEDC_SPEED_MODE, channel);
+    xSemaphoreGive(ledc_mutex);
 }
 
 static void status_led_set(uint8_t red, uint8_t green, uint8_t blue) {
@@ -103,8 +110,10 @@ static void status_led_set(uint8_t red, uint8_t green, uint8_t blue) {
 }
 
 static void status_led_channel_fade(ledc_channel_t channel, uint8_t value, int max_fade_time_ms) {
+    xSemaphoreTake(ledc_mutex, portMAX_DELAY);
     ledc_set_fade_with_time(LEDC_SPEED_MODE, channel, value, max_fade_time_ms);
     ledc_fade_start(LEDC_SPEED_MODE, channel, LEDC_FADE_NO_WAIT);
+    xSemaphoreGive(ledc_mutex);
 }
 
 static void status_led_fade(uint8_t red, uint8_t green, uint8_t blue, int max_fade_time_ms) {
@@ -160,6 +169,8 @@ static void status_led_task() {
 }
 
 void status_led_init() {
+    ledc_mutex = xSemaphoreCreateMutex();
+
     ledc_timer_config_t ledc_timer = {
             .duty_resolution = LEDC_TIMER_8_BIT,
             .freq_hz = STATUS_LED_FREQ,

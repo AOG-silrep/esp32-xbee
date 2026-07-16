@@ -416,7 +416,7 @@
                             .append($('<span>', {class: 'text-' + wifiRssiColorClass(wifi.sta.rssi), text: wifi.sta.rssi + "dBm"}));
                     }
                 }).always(function() {
-                    setTimeout(statusUpdate, 2500);
+                    setTimeout(statusUpdate, 1000);
                 });
             };
             statusUpdate();

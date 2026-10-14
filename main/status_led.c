@@ -23,6 +23,7 @@
 #include "freertos/semphr.h"
 #include "freertos/portmacro.h"
 #include "status_led.h"
+#include "wifi.h"
 #include <sys/queue.h>
 
 #define LEDC_SPEED_MODE LEDC_HIGH_SPEED_MODE
@@ -43,6 +44,16 @@
 
 #define STATUS_LED_FREQ 1000
 
+// HUZZAH32 onboard red LED, wired through a resistor to ground and therefore active high,
+// unlike the common anode RGB LED above. Blinked continuously as a liveness indicator.
+#define HEARTBEAT_LED_GPIO GPIO_NUM_13
+#define HEARTBEAT_LED_CHANNEL LEDC_CHANNEL_6
+#define HEARTBEAT_LED_NORMAL_INTERVAL 500  // ms per phase -> 1 Hz
+#define HEARTBEAT_LED_FAULT_INTERVAL 100   // ms per phase -> 5 Hz
+#define HEARTBEAT_LED_DIM_DUTY 0x11                           // ~7% of the 8 bit duty range
+#define HEARTBEAT_LED_ON_DUTY (0xFF - HEARTBEAT_LED_DIM_DUTY)  // ~93%
+#define HEARTBEAT_LED_OFF_DUTY 0x00
+
 static SLIST_HEAD(status_led_color_list_t, status_led_color_t) status_led_colors_list;
 
 static TaskHandle_t led_task;
@@ -51,6 +62,8 @@ static TaskHandle_t led_task;
 // are called from both status_led_task and other tasks (e.g. wifi_sta_status_task via rssi_led_fade),
 // so all LEDC channel access must be serialized to avoid corrupting the driver's shared fade state.
 static SemaphoreHandle_t ledc_mutex;
+
+static bool heartbeat_fault = false;
 
 void status_led_clear() {
 
@@ -213,6 +226,10 @@ void status_led_init() {
     ledc_config.gpio_num = STATUS_LED_ASSOC_GPIO;
     ledc_channel_config(&ledc_config);
 
+    ledc_config.channel = HEARTBEAT_LED_CHANNEL;
+    ledc_config.gpio_num = HEARTBEAT_LED_GPIO;
+    ledc_channel_config(&ledc_config);
+
     ledc_fade_func_install(0);
 
     xTaskCreate(status_led_task, "status_led", 2048, NULL, TASK_PRIORITY_STATUS_LED, &led_task);
@@ -240,4 +257,39 @@ void sleep_led_set(uint8_t value) {
 
 void sleep_led_fade(uint8_t value, int max_fade_time_ms) {
     status_led_channel_fade(STATUS_LED_SLEEP_CHANNEL, 0xFF - value, max_fade_time_ms);
+}
+
+void heartbeat_led_fault(bool fault) {
+    heartbeat_fault = fault;
+}
+
+static bool heartbeat_led_faulted() {
+    if (heartbeat_fault) return true;
+
+    // A station that is configured but not associated is the common real world failure.
+    // AP only operation is a legitimate mode, not a fault.
+    wifi_sta_status_t sta_status;
+    wifi_sta_status(&sta_status);
+
+    return sta_status.active && !sta_status.connected;
+}
+
+static void heartbeat_led_task() {
+    while (true) {
+        bool faulted = heartbeat_led_faulted();
+        uint32_t interval = faulted ? HEARTBEAT_LED_FAULT_INTERVAL : HEARTBEAT_LED_NORMAL_INTERVAL;
+
+        // Normal operation alternates full brightness with a dim glow, never going dark.
+        // A fault blinks fully off instead, so the two are unmistakable at a glance.
+        status_led_channel_set(HEARTBEAT_LED_CHANNEL, HEARTBEAT_LED_ON_DUTY);
+        vTaskDelay(pdMS_TO_TICKS(interval));
+
+        status_led_channel_set(HEARTBEAT_LED_CHANNEL,
+                faulted ? HEARTBEAT_LED_OFF_DUTY : HEARTBEAT_LED_DIM_DUTY);
+        vTaskDelay(pdMS_TO_TICKS(interval));
+    }
+}
+
+void heartbeat_led_init() {
+    xTaskCreate(heartbeat_led_task, "heartbeat_led", 2048, NULL, TASK_PRIORITY_STATUS_LED, NULL);
 }

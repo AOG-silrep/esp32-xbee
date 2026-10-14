@@ -64,6 +64,7 @@ static void sntp_time_set_handler(struct timeval *tv) {
 void app_main()
 {
     status_led_init();
+    heartbeat_led_init();
     status_led_handle_t status_led = status_led_add(0xFFFFFF33, STATUS_LED_FADE, 250, 2500, 0);
 
     log_init();
@@ -113,9 +114,11 @@ void app_main()
     if (reset_reason != ESP_RST_POWERON && reset_reason != ESP_RST_SW && reset_reason != ESP_RST_WDT) {
         status_led->active = false;
         status_led_handle_t error_led = status_led_add(0xFF000033, STATUS_LED_BLINK, 50, 10000, 0);
+        heartbeat_led_fault(true);
 
         vTaskDelay(pdMS_TO_TICKS(10000));
 
+        heartbeat_led_fault(false);
         status_led_remove(error_led);
         status_led->active = true;
     }

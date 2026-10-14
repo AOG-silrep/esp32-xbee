@@ -37,4 +37,7 @@ void assoc_led_fade(uint8_t value, int max_fade_time_ms);
 void sleep_led_set(uint8_t value);
 void sleep_led_fade(uint8_t value, int max_fade_time_ms);
 
+void heartbeat_led_init();
+void heartbeat_led_fault(bool fault);
+
 #endif //ESP32_XBEE_STATUS_LED_H

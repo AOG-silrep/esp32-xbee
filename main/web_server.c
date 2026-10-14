@@ -616,6 +616,45 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     return json_response(req, root);
 }
 
+static esp_err_t config_reset_post_handler(httpd_req_t *req) {
+    if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
+
+    // Keep the WiFi station credentials unless explicitly asked to clear them
+    bool clear_wifi_sta = false;
+
+    int ret = httpd_req_recv(req, buffer, BUFFER_SIZE - 1);
+    if (ret > 0) {
+        buffer[ret] = '\0';
+
+        cJSON *request = cJSON_Parse(buffer);
+        clear_wifi_sta = cJSON_IsTrue(cJSON_GetObjectItem(request, "wifi_sta"));
+        cJSON_Delete(request);
+    } else if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+        httpd_resp_send_408(req);
+
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Resetting configuration to defaults, WiFi station credentials %s",
+            clear_wifi_sta ? "cleared" : "kept");
+
+    esp_err_t err = config_reset_defaults(clear_wifi_sta);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "config_reset_defaults failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(err));
+
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", true);
+    esp_err_t resp_err = json_response(req, root);
+
+    config_restart();
+
+    return resp_err;
+}
+
 // Computes each core's CPU load (%) since the previous call, based on the change in time
 // each core's idle task spent running relative to the elapsed wall clock time.
 static void cpu_load_get(float loads[portNUM_PROCESSORS]) {
@@ -861,13 +900,14 @@ static httpd_handle_t web_server_start(void)
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 9;
+    config.max_uri_handlers = 10;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
         register_uri_handler(server, "/config", HTTP_GET, config_get_handler);
         register_uri_handler(server, "/config", HTTP_POST, config_post_handler);
+        register_uri_handler(server, "/config/reset", HTTP_POST, config_reset_post_handler);
         register_uri_handler(server, "/status", HTTP_GET, status_get_handler);
 
         register_uri_handler(server, "/log", HTTP_GET, log_get_handler);

@@ -151,6 +151,22 @@
                 xhr.send(file);
             });
 
+            $('#reset-confirm').on('click', function() {
+                var submit = $(this).prop('disabled', true);
+                var data = JSON.stringify({ wifi_sta: $('#reset-wifi-sta').prop('checked') });
+                $.post('config/reset', data).done(function() {
+                    $('#reset-modal').modal('hide');
+                    $('#restarting-modal').modal('show');
+
+                    // Allow some time to reload
+                    setTimeout(function() {
+                        reloadOnStatus = true;
+                    }, 2500);
+                }).always(function() {
+                    submit.prop('disabled', false);
+                });
+            });
+
             form.find("input[type='checkbox']").each(function() {
                 var self = $(this);
                 var hidden = $("<input>")
@@ -1295,10 +1311,11 @@
                     </div>
                     <div class="card mb-3">
                         <div class="card-header">
-                            Log
+                            Log &amp; reset
                         </div>
                         <div class="card-body">
                             <a href="log.html" class="btn btn-primary">View log</a>
+                            <button type="button" class="btn btn-danger mt-2 d-block" id="reset-submit" data-toggle="modal" data-target="#reset-modal">Reset to defaults</button>
                         </div>
                     </div>
                 </div>
@@ -1312,6 +1329,27 @@
             </div>
         </div>
     </footer>
+    <div class="modal fade" id="reset-modal">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h4 class="modal-title">Reset to defaults?</h4>
+                </div>
+                <div class="modal-body">
+                    <p>All settings will be returned to their startup defaults and the ESP32 will restart.</p>
+                    <p>The WiFi hotspot settings are <strong>not</strong> changed, so you will still be able to reach this page over the ESP32's own hotspot. Reset those manually if you need to.</p>
+                    <div class="custom-control custom-checkbox">
+                        <input type="checkbox" class="custom-control-input" id="reset-wifi-sta">
+                        <label class="custom-control-label" for="reset-wifi-sta">Also clear the WiFi network (station) name and password</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="reset-confirm">Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="modal fade" id="restarting-modal">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">

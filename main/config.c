@@ -442,6 +442,50 @@ esp_err_t config_reset() {
     return nvs_erase_all(config_handle);
 }
 
+// Hotspot settings are never reset to defaults, so the device stays reachable over its own AP
+static const char *CONFIG_KEYS_WIFI_AP[] = {
+        KEY_CONFIG_WIFI_AP_ACTIVE, KEY_CONFIG_WIFI_AP_COLOR, KEY_CONFIG_WIFI_AP_SSID,
+        KEY_CONFIG_WIFI_AP_SSID_HIDDEN, KEY_CONFIG_WIFI_AP_AUTH_MODE,
+        KEY_CONFIG_WIFI_AP_PASSWORD, KEY_CONFIG_WIFI_AP_GATEWAY, KEY_CONFIG_WIFI_AP_SUBNET
+};
+
+static const char *CONFIG_KEYS_WIFI_STA[] = {
+        KEY_CONFIG_WIFI_STA_ACTIVE, KEY_CONFIG_WIFI_STA_COLOR, KEY_CONFIG_WIFI_STA_SSID,
+        KEY_CONFIG_WIFI_STA_PASSWORD, KEY_CONFIG_WIFI_STA_SCAN_MODE_ALL,
+        KEY_CONFIG_WIFI_STA_AP_FORWARD, KEY_CONFIG_WIFI_STA_STATIC, KEY_CONFIG_WIFI_STA_IP,
+        KEY_CONFIG_WIFI_STA_GATEWAY, KEY_CONFIG_WIFI_STA_SUBNET, KEY_CONFIG_WIFI_STA_DNS_A,
+        KEY_CONFIG_WIFI_STA_DNS_B
+};
+
+static bool config_key_in_list(const char *key, const char **list, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(key, list[i]) == 0) return true;
+    }
+
+    return false;
+}
+
+esp_err_t config_reset_defaults(bool clear_wifi_sta) {
+    uart_nmea("$PESP,CFG,RESET");
+
+    int count;
+    const config_item_t *items = config_items_get(&count);
+    for (int i = 0; i < count; i++) {
+        const char *key = items[i].key;
+
+        if (config_key_in_list(key, CONFIG_KEYS_WIFI_AP,
+                sizeof(CONFIG_KEYS_WIFI_AP) / sizeof(char *))) continue;
+        if (!clear_wifi_sta && config_key_in_list(key, CONFIG_KEYS_WIFI_STA,
+                sizeof(CONFIG_KEYS_WIFI_STA) / sizeof(char *))) continue;
+
+        // Erasing a key restores its default, as the getters fall back to CONFIG_ITEMS
+        esp_err_t err = nvs_erase_key(config_handle, key);
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) return err;
+    }
+
+    return nvs_commit(config_handle);
+}
+
 int8_t config_get_i8(const config_item_t *item) {
     int8_t value = item->def.int8;
     nvs_get_i8(config_handle, item->key, &value);

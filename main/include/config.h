@@ -145,6 +145,7 @@ typedef struct config_item {
 
 esp_err_t config_init();
 esp_err_t config_reset();
+esp_err_t config_reset_defaults(bool clear_wifi_sta);
 
 const config_item_t *config_items_get(int *count);
 const config_item_t * config_get_item(const char *key);

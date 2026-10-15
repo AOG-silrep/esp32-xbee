@@ -109,7 +109,7 @@ const config_item_t CONFIG_ITEMS[] = {
         }, {
                 .key = KEY_CONFIG_NTRIP_CLIENT_COLOR,
                 .type = CONFIG_ITEM_TYPE_COLOR,
-                .def.color.rgba = 0x0044ff55u
+                .def.color.rgba = 0x00ff0055u
         }, {
                 .key = KEY_CONFIG_NTRIP_CLIENT_HOST,
                 .type = CONFIG_ITEM_TYPE_STRING,
@@ -297,7 +297,7 @@ const config_item_t CONFIG_ITEMS[] = {
         }, {
                 .key = KEY_CONFIG_WIFI_STA_COLOR,
                 .type = CONFIG_ITEM_TYPE_COLOR,
-                .def.color.rgba = 0x00ff0055u
+                .def.color.rgba = 0x0000ff55u
         }, {
                 .key = KEY_CONFIG_WIFI_STA_SSID,
                 .type = CONFIG_ITEM_TYPE_STRING,

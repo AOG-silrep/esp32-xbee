@@ -331,6 +331,8 @@
 
             var streamStatsTexts = form.find('.stream-stats');
 
+            var ntripClientRtkText = form.find('.ntrip-client-rtk');
+
             var reloadOnStatus = false;
 
             var secondsToHHMMSS = (seconds) => {
@@ -355,6 +357,95 @@
                     ++u;
                 } while(Math.abs(bytes) >= thresh && u < units.length - 1);
                 return bytes.toFixed(1) + units[u];
+            };
+
+            var RTK_STALE_SECONDS = 10;
+            var RTK_BASE_STALE_SECONDS = 120;
+
+            var gpsFixNames = ['No fix', 'GPS', 'DGPS', 'PPS', 'RTK fixed', 'RTK float', 'Dead reckoning', 'Manual', 'Simulation'];
+
+            var gpsFixColorClass = function(fix) {
+                if (fix === 4) {
+                    return 'success';
+                } else if (fix === 5) {
+                    return 'warning';
+                } else {
+                    return 'danger';
+                }
+            };
+
+            var METRES_PER_FOOT = 0.3048;
+            var FEET_PER_MILE = 5280;
+
+            var humanDistance = (metres) => {
+                var feet = metres / METRES_PER_FOOT;
+                return Math.abs(feet) >= 1000 ? (feet / FEET_PER_MILE).toFixed(3) + ' mi' : feet.toFixed(2) + ' ft';
+            };
+            var humanSigma = (metres) => typeof metres === 'undefined' ? '?' : (metres / METRES_PER_FOOT).toFixed(3) + ' ft';
+
+            var rtkStatusUpdate = function(rtk) {
+                ntripClientRtkText.empty();
+                if (typeof rtk === 'undefined') return;
+
+                var isStale = (age, staleSeconds) => typeof age !== 'undefined' && age > staleSeconds;
+                var staleSuffix = (age, staleSeconds) => isStale(age, staleSeconds) ? ' (' + Math.round(age) + 's old)' : '';
+
+                var addPart = function(text, colorClass, stale, title) {
+                    if (ntripClientRtkText.children().length > 0) ntripClientRtkText.appendText(' \u00b7 ');
+
+                    ntripClientRtkText.append($('<span>', {
+                        class: stale ? 'text-muted' : (colorClass ? 'text-' + colorClass : ''),
+                        text: text,
+                        title: title || ''
+                    }));
+                };
+
+                var base = rtk.base;
+                var rover = rtk.rover;
+                var gst = rtk.gst;
+                var distance = rtk.distance;
+
+                if (base) {
+                    addPart('Base ' + base.station_id + staleSuffix(base.age, RTK_BASE_STALE_SECONDS), null,
+                        isStale(base.age, RTK_BASE_STALE_SECONDS),
+                        'RTCM ' + base.message_type + ' ECEF ' + base.ecef.map(v => v.toFixed(4)).join(', '));
+                } else {
+                    addPart('Waiting for base position (RTCM 1005/1006)', 'muted');
+                }
+
+                if (!rover) {
+                    addPart('No GGA from receiver', 'danger');
+                    return;
+                }
+
+                var roverStale = isStale(rover.age, RTK_STALE_SECONDS);
+
+                addPart((gpsFixNames[rover.fix] || ('Fix ' + rover.fix)) + staleSuffix(rover.age, RTK_STALE_SECONDS),
+                    gpsFixColorClass(rover.fix), roverStale);
+
+                if (distance) {
+                    addPart(humanDistance(distance.d3) + ' (horiz ' + humanDistance(distance.horizontal) + ', ' +
+                        (distance.vertical >= 0 ? '\u2191 ' : '\u2193 ') + humanDistance(Math.abs(distance.vertical)) + ')',
+                        null, roverStale, '3D (horizontal, vertical) distance from base antenna');
+                }
+
+                addPart(rover.sats + ' sats', null, roverStale);
+                if (typeof rover.hdop !== 'undefined') {
+                    addPart('HDOP ' + rover.hdop.toFixed(2), null, roverStale);
+                }
+                if (typeof rover.correction_age !== 'undefined') {
+                    addPart('corr ' + rover.correction_age.toFixed(1) + ' s', null, roverStale, 'Age of differential corrections');
+                }
+                if (base && typeof rover.station_id !== 'undefined' && rover.station_id !== base.station_id) {
+                    addPart('GGA station ' + rover.station_id + ' \u2260 base ' + base.station_id, 'warning', roverStale,
+                        'Receiver reports corrections from a different station ID than the RTCM 1005/1006 base position');
+                }
+
+                if (gst) {
+                    addPart('\u03c3 ' + humanSigma(gst.lat) + ' / ' + humanSigma(gst.lon) + ' / ' + humanSigma(gst.alt) +
+                        staleSuffix(gst.age, RTK_STALE_SECONDS), null, isStale(gst.age, RTK_STALE_SECONDS),
+                        '1-sigma error latitude / longitude / altitude (GST)');
+                }
             };
 
             var statusUpdate = function() {
@@ -401,6 +492,9 @@
                             stats.total.out.toLocaleString() +
                             " bytes out (" + (stats.rate.out * 8) + "bps)");
                     });
+
+                    // RTK base station / rover
+                    rtkStatusUpdate(data.rtk);
 
                     // WiFi
                     let wifi = data.wifi;
@@ -1075,6 +1169,9 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                        <div class="card-footer py-1">
+                            <small class="ntrip-client-rtk"></small>
                         </div>
                     </div>
                     <div class="card mb-3">

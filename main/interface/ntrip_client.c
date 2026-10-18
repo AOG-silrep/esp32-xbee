@@ -24,6 +24,7 @@
 #include <status_led.h>
 #include <retry.h>
 #include <stream_stats.h>
+#include <rtk_status.h>
 #include <freertos/event_groups.h>
 #include <esp_ota_ops.h>
 #include "interface/ntrip.h"
@@ -84,6 +85,8 @@ static void ntrip_client_nmea_gga_send_task(void *ctx) {
 }
 
 static void ntrip_client_uart_handler(void* handler_args, esp_event_base_t base, int32_t length, void* buffer) {
+    rtk_status_nmea_feed(buffer, length);
+
     // Caster connected and ready for data
     if ((xEventGroupGetBits(client_event_group) & CASTER_READY_BIT) == 0) return;
 
@@ -158,6 +161,8 @@ static void ntrip_client_task(void *ctx) {
 
         retry_reset(delay_handle);
 
+        rtk_status_base_reset();
+
         if (status_led != NULL) status_led->active = true;
 
         // Start sending GGA to caster
@@ -169,6 +174,8 @@ static void ntrip_client_task(void *ctx) {
         // Read from socket until disconnected
         while (sock != -1 && (len = read(sock, buffer, BUFFER_SIZE)) >= 0) {
             uart_write(buffer, len);
+
+            rtk_status_rtcm_feed((uint8_t *) buffer, len);
 
             stream_stats_increment(stream_stats, len, 0);
         }
@@ -199,6 +206,8 @@ static void ntrip_client_task(void *ctx) {
 
 void ntrip_client_init() {
     if (!config_get_bool1(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_ACTIVE))) return;
+
+    rtk_status_init();
 
     xTaskCreate(ntrip_client_task, "ntrip_client_task", 4096, NULL, TASK_PRIORITY_INTERFACE, NULL);
 }

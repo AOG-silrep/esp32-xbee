@@ -1,9 +1,11 @@
 idf_component_register(SRCS "main.c"
 		"config.c"
 		"core_dump.c"
+		"geodesy.c"
 		"log.c"
 		"interface/ntrip_util.c"
 		"retry.c"
+		"rtk_status.c"
 		"status_led.c"
 		"stream_stats.c"
 		"uart.c"
@@ -16,6 +18,7 @@ idf_component_register(SRCS "main.c"
 		"interface/socket_client.c"
 		"interface/socket_server.c"
 		"protocol/nmea.c"
+		"protocol/rtcm.c"
         INCLUDE_DIRS "include")
 
 spiffs_create_partition_image(www ../www FLASH_IN_PROJECT)

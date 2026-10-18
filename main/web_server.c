@@ -33,9 +33,11 @@
 #include <esp_ota_ops.h>
 #include <esp_wifi_ap_get_sta_list.h>
 #include <stream_stats.h>
+#include <rtk_status.h>
 #include <esp32/rom/crc.h>
 #include <lwip/sockets.h>
 #include <esp_timer.h>
+#include <math.h>
 #include "web_server.h"
 
 // Max length a file path can have on storage
@@ -685,6 +687,54 @@ static void cpu_load_get(float loads[portNUM_PROCESSORS]) {
     initialized = true;
 }
 
+static void json_add_number_if_valid(cJSON *object, const char *name, double number) {
+    if (!isnan(number)) cJSON_AddNumberToObject(object, name, number);
+}
+
+static void rtk_status_json(cJSON *root) {
+    rtk_status_t status;
+    if (!rtk_status_get(&status)) return;
+
+    cJSON *rtk = cJSON_AddObjectToObject(root, "rtk");
+
+    if (status.base_valid) {
+        cJSON *base = cJSON_AddObjectToObject(rtk, "base");
+        cJSON_AddNumberToObject(base, "station_id", status.base.station_id);
+        cJSON_AddNumberToObject(base, "message_type", status.base.message_type);
+        cJSON *ecef = cJSON_AddArrayToObject(base, "ecef");
+        for (int i = 0; i < 3; i++) {
+            cJSON_AddItemToArray(ecef, cJSON_CreateNumber(status.base.ecef[i]));
+        }
+        if (status.base.message_type == 1006) cJSON_AddNumberToObject(base, "antenna_height", status.base.antenna_height);
+        cJSON_AddNumberToObject(base, "age", status.base_age);
+    }
+
+    if (status.gga_valid) {
+        cJSON *rover = cJSON_AddObjectToObject(rtk, "rover");
+        cJSON_AddNumberToObject(rover, "fix", status.gga.fix_quality);
+        cJSON_AddNumberToObject(rover, "sats", status.gga.satellites);
+        json_add_number_if_valid(rover, "hdop", status.gga.hdop);
+        json_add_number_if_valid(rover, "correction_age", status.gga.correction_age);
+        if (status.gga.station_id >= 0) cJSON_AddNumberToObject(rover, "station_id", status.gga.station_id);
+        cJSON_AddNumberToObject(rover, "age", status.gga_age);
+    }
+
+    if (status.gst_valid) {
+        cJSON *gst = cJSON_AddObjectToObject(rtk, "gst");
+        json_add_number_if_valid(gst, "lat", status.gst.sigma_latitude);
+        json_add_number_if_valid(gst, "lon", status.gst.sigma_longitude);
+        json_add_number_if_valid(gst, "alt", status.gst.sigma_altitude);
+        cJSON_AddNumberToObject(gst, "age", status.gst_age);
+    }
+
+    if (status.distance_valid) {
+        cJSON *distance = cJSON_AddObjectToObject(rtk, "distance");
+        cJSON_AddNumberToObject(distance, "d3", status.distance_3d);
+        cJSON_AddNumberToObject(distance, "horizontal", status.distance_horizontal);
+        cJSON_AddNumberToObject(distance, "vertical", status.distance_vertical);
+    }
+}
+
 static esp_err_t status_get_handler(httpd_req_t *req) {
     if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
 
@@ -787,6 +837,9 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
             cJSON_AddStringToObject(sta, "ip6", ip);
         }
     }
+
+    // RTK base station / rover
+    rtk_status_json(root);
 
     return json_response(req, root);
 }

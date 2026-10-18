@@ -38,6 +38,7 @@
 #include <lwip/sockets.h>
 #include <esp_timer.h>
 #include <math.h>
+#include "interface/ntrip.h"
 #include "web_server.h"
 
 // Max length a file path can have on storage
@@ -711,6 +712,8 @@ static void rtk_status_json(cJSON *root) {
 
     if (status.gga_valid) {
         cJSON *rover = cJSON_AddObjectToObject(rtk, "rover");
+        json_add_number_if_valid(rover, "lat", status.gga.latitude);
+        json_add_number_if_valid(rover, "lon", status.gga.longitude);
         cJSON_AddNumberToObject(rover, "fix", status.gga.fix_quality);
         cJSON_AddNumberToObject(rover, "sats", status.gga.satellites);
         json_add_number_if_valid(rover, "hdop", status.gga.hdop);
@@ -865,6 +868,138 @@ static esp_err_t wifi_scan_get_handler(httpd_req_t *req) {
     return json_response(req, root);
 }
 
+static esp_err_t ntrip_sourcetable_post_handler(httpd_req_t *req) {
+    if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
+
+    int ret = httpd_req_recv(req, buffer, BUFFER_SIZE - 1);
+    if (ret <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+
+        return ESP_FAIL;
+    }
+
+    buffer[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(buffer);
+    cJSON *host_item = cJSON_GetObjectItem(root, "host");
+    cJSON *port_item = cJSON_GetObjectItem(root, "port");
+    cJSON *user_item = cJSON_GetObjectItem(root, "user");
+    cJSON *pass_item = cJSON_GetObjectItem(root, "pass");
+
+    char *host = cJSON_IsString(host_item) ? host_item->valuestring : "";
+    int port = cJSON_IsNumber(port_item) ? port_item->valueint :
+            (cJSON_IsString(port_item) ? atoi(port_item->valuestring) : 0);
+    char *username = cJSON_IsString(user_item) ? user_item->valuestring : "";
+
+    if (strlen(host) == 0 || port <= 0 || port > 65535) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Host and port required");
+        return ESP_FAIL;
+    }
+
+    // Saved password is masked in the form, so fall back to the stored one
+    char *password = NULL;
+    if (!cJSON_IsString(pass_item) || strcmp(pass_item->valuestring, CONFIG_VALUE_UNCHANGED) == 0) {
+        config_get_str_blob_alloc(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_PASSWORD), (void **) &password);
+    } else {
+        password = strdup(pass_item->valuestring);
+    }
+
+    esp_err_t err = ESP_OK;
+    const char *error = NULL;
+    char error_message[128];
+    char *authorization = NULL;
+    char *status = NULL;
+    char *body = NULL;
+    int len = 0;
+
+    int sock = connect_socket(host, port, SOCK_STREAM);
+    if (sock == CONNECT_SOCKET_ERROR_RESOLVE) {
+        error = "Could not resolve host";
+        goto _done;
+    } else if (sock < 0) {
+        error = "Could not connect to host";
+        goto _done;
+    }
+
+    // HTTP/1.0 so the caster sends a plain body and closes the connection when done
+    if (strlen(username) > 0) authorization = http_auth_basic_header(username, password != NULL ? password : "");
+    snprintf(buffer, BUFFER_SIZE, "GET / HTTP/1.0" NEWLINE \
+            "Host: %s:%d" NEWLINE \
+            "User-Agent: NTRIP %s/%s" NEWLINE \
+            "%s%s%s" \
+            NEWLINE
+            , host, port, NTRIP_CLIENT_NAME, &esp_app_get_description()->version[1],
+            authorization != NULL ? "Authorization: " : "", authorization != NULL ? authorization : "",
+            authorization != NULL ? NEWLINE : "");
+
+    if (send(sock, buffer, strlen(buffer), 0) < 0) {
+        error = "Could not send request to caster";
+        goto _done;
+    }
+
+    // Read until the end of the response headers
+    while (body == NULL && len < BUFFER_SIZE - 1) {
+        int read_len = recv(sock, buffer + len, BUFFER_SIZE - 1 - len, 0);
+        if (read_len <= 0) break;
+
+        len += read_len;
+        buffer[len] = '\0';
+        body = strstr(buffer, NEWLINE NEWLINE);
+    }
+
+    if (len == 0) {
+        error = "No response from caster";
+        goto _done;
+    }
+
+    status = extract_http_header(buffer, "");
+    if (status == NULL) {
+        error = "Malformed response from caster";
+        goto _done;
+    } else if (!ntrip_response_sourcetable_ok(status)) {
+        snprintf(error_message, sizeof(error_message), "Caster did not return a sourcetable: %s", status);
+        error = error_message;
+        goto _done;
+    } else if (body == NULL) {
+        error = "Malformed response from caster";
+        goto _done;
+    }
+
+    // Stream the sourcetable through, it can be far larger than the buffer
+    httpd_resp_set_type(req, "text/plain");
+
+    body += strlen(NEWLINE NEWLINE);
+    bool ended = strstr(body, "ENDSOURCETABLE") != NULL;
+    int body_len = len - (int) (body - buffer);
+    if (body_len > 0) err = httpd_resp_send_chunk(req, body, body_len);
+
+    while (err == ESP_OK && !ended && (len = recv(sock, buffer, BUFFER_SIZE, 0)) > 0) {
+        ended = memmem(buffer, len, "ENDSOURCETABLE", strlen("ENDSOURCETABLE")) != NULL;
+        err = httpd_resp_send_chunk(req, buffer, len);
+    }
+
+    if (err == ESP_OK) err = httpd_resp_send_chunk(req, NULL, 0);
+
+    _done:
+    if (error != NULL) {
+        ESP_LOGW(TAG, "Sourcetable from %s:%d failed: %s", host, port, error);
+        httpd_resp_set_status(req, "502 Bad Gateway");
+        httpd_resp_set_type(req, "text/plain");
+        err = httpd_resp_sendstr(req, error);
+    }
+
+    destroy_socket(&sock);
+    free(status);
+    free(authorization);
+    free(password);
+    cJSON_Delete(root);
+
+    return err;
+}
+
 static esp_err_t ota_post_handler(httpd_req_t *req) {
     if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
 
@@ -953,7 +1088,7 @@ static httpd_handle_t web_server_start(void)
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 12;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -968,6 +1103,8 @@ static httpd_handle_t web_server_start(void)
         register_uri_handler(server, "/heap_info", HTTP_GET, heap_info_get_handler);
 
         register_uri_handler(server, "/wifi/scan", HTTP_GET, wifi_scan_get_handler);
+
+        register_uri_handler(server, "/ntrip/sourcetable", HTTP_POST, ntrip_sourcetable_post_handler);
 
         register_uri_handler(server, "/ota", HTTP_POST, ota_post_handler);
 

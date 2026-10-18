@@ -28,5 +28,6 @@ bool ntrip_response_ok(void *response) {
 }
 
 bool ntrip_response_sourcetable_ok(void *response) {
-    return str_starts_with(response, "HTTP/1.1 200 OK") || str_starts_with(response, "SOURCETABLE 200 OK");
+    return str_starts_with(response, "HTTP/1.1 200 OK") || str_starts_with(response, "HTTP/1.0 200 OK") ||
+           str_starts_with(response, "SOURCETABLE 200 OK");
 }

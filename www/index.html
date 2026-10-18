@@ -334,6 +334,9 @@
             var uartGpsText = form.find('.uart-gps');
             var ntripClientRtkText = form.find('.ntrip-client-rtk');
 
+            // Latest receiver position, for sorting mountpoints by distance
+            var roverPosition = null;
+
             var reloadOnStatus = false;
 
             var secondsToHHMMSS = (seconds) => {
@@ -522,6 +525,11 @@
                     uartGpsUpdate(data.rtk);
                     ntripClientRtkUpdate(data.rtk, typeof data.streams.ntrip_client !== 'undefined');
 
+                    var rover = data.rtk && data.rtk.rover;
+                    if (rover && typeof rover.lat !== 'undefined' && typeof rover.lon !== 'undefined') {
+                        roverPosition = {lat: rover.lat, lon: rover.lon};
+                    }
+
                     // WiFi
                     let wifi = data.wifi;
 
@@ -603,6 +611,116 @@
             wifiNetworksSsidInput.on('input change', function() {
                 wifiNetworksPasswordInput.prop('disabled', false);
                 wifiNetworksPasswordEmptyInput.prop('disabled', true);
+            });
+
+            // NTRIP client mountpoints list from the caster's sourcetable
+            var ntripMountpointsScanButton = form.find('.ntrip-mountpoints-scan');
+            var ntripMountpointsDropdownButton = form.find('.ntrip-mountpoints-dropdown');
+            var ntripMountpointsList = form.find('.ntrip-mountpoints');
+            var ntripMountpointsMessage = ntripMountpointsList.find('.ntrip-mountpoints-message');
+            var ntripMountpointsOpenList = ntripMountpointsList.find('.ntrip-mountpoints-open');
+            var ntripMountpointsSecuredList = ntripMountpointsList.find('.ntrip-mountpoints-secured');
+            var ntripMountpointsMpInput = form.find('.ntrip-mountpoints-mp');
+
+            // Great-circle distance in km
+            var haversineKm = (lat1, lon1, lat2, lon2) => {
+                var rad = Math.PI / 180;
+                var dLat = (lat2 - lat1) * rad;
+                var dLon = (lon2 - lon1) * rad;
+                var a = Math.pow(Math.sin(dLat / 2), 2) +
+                    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.pow(Math.sin(dLon / 2), 2);
+                return 12742 * Math.asin(Math.sqrt(a));
+            };
+
+            var ntripMountpointsShow = function(message, colorClass) {
+                if (message) {
+                    $('<span>', {class: 'dropdown-item-text text-' + colorClass, text: message}).appendTo(ntripMountpointsMessage);
+                }
+
+                // Only show headers that have entries under them
+                ntripMountpointsList.find('.dropdown-header').each(function() {
+                    $(this).toggle($(this).next().children().length > 0);
+                });
+
+                ntripMountpointsDropdownButton.trigger('click');
+            };
+
+            ntripMountpointsScanButton.on('click', function() {
+                ntripMountpointsMessage.empty();
+                ntripMountpointsOpenList.empty();
+                ntripMountpointsSecuredList.empty();
+
+                ntripMountpointsScanButton.prop('disabled', true);
+                ntripMountpointsDropdownButton.prop('disabled', true);
+                $.ajax({
+                    url: 'ntrip/sourcetable',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    dataType: 'text',
+                    data: JSON.stringify({
+                        host: form.find('input[name="ntr_cli_host"]').val(),
+                        port: parseInt(form.find('input[name="ntr_cli_port"]').val()),
+                        user: form.find('input[name="ntr_cli_user"]').val(),
+                        pass: form.find('input[name="ntr_cli_pass"]').val()
+                    })
+                }).always(function() {
+                    ntripMountpointsScanButton.prop('disabled', false);
+                    ntripMountpointsDropdownButton.prop('disabled', false);
+                }).done(function(data) {
+                    // STR;mountpoint;identifier;format;format-details;carrier;nav-system;network;country;latitude;longitude;
+                    // nmea;solution;generator;compr-encryp;authentication;fee;bitrate;misc
+                    var mountpoints = data.split(/\r?\n/)
+                        .filter(line => line.startsWith('STR;'))
+                        .map(line => {
+                            var fields = line.split(';');
+                            var lat = parseFloat(fields[9]);
+                            var lon = parseFloat(fields[10]);
+                            var located = isFinite(lat) && isFinite(lon) && (lat !== 0 || lon !== 0);
+                            return {
+                                name: fields[1],
+                                identifier: fields[2],
+                                format: fields[3],
+                                network: fields[7],
+                                country: fields[8],
+                                auth: fields[15],
+                                fee: fields[16],
+                                distance: located && roverPosition ? haversineKm(roverPosition.lat, roverPosition.lon, lat, lon) : null
+                            };
+                        });
+
+                    // Nearest first, stations without a position last, otherwise the caster's order
+                    if (roverPosition) {
+                        mountpoints.sort((a, b) => {
+                            if (a.distance === null || b.distance === null) return (a.distance === null) - (b.distance === null);
+                            return a.distance - b.distance;
+                        });
+                    }
+
+                    mountpoints.forEach(function(mountpoint) {
+                        var entry = $('<a>', {class: 'ntrip-mountpoint dropdown-item', href: 'javascript:void(0);'});
+                        var open = mountpoint.auth === 'N';
+                        entry.data('mountpoint', mountpoint.name);
+                        entry.prop('title', [mountpoint.identifier, mountpoint.network, mountpoint.country].filter(s => s).join(', '));
+
+                        entry.appendText(mountpoint.name + (mountpoint.format ? ' (' + mountpoint.format + ') ' : ' '));
+                        if (mountpoint.fee === 'Y') {
+                            entry.append($('<span>', {class: 'text-warning', text: 'fee '}));
+                        }
+                        if (mountpoint.distance !== null) {
+                            entry.append($('<span>', {class: 'text-muted', text: mountpoint.distance.toFixed(1) + ' km'}));
+                        }
+
+                        entry.appendTo(open ? ntripMountpointsOpenList : ntripMountpointsSecuredList);
+                    });
+
+                    ntripMountpointsList.find('.ntrip-mountpoint').on('click', function() {
+                        ntripMountpointsMpInput.val($(this).data('mountpoint')).trigger('change');
+                    });
+
+                    ntripMountpointsShow(mountpoints.length === 0 ? 'No mountpoints found' : null, 'muted');
+                }).fail(function(xhr) {
+                    ntripMountpointsShow(xhr.responseText || 'Could not get the mountpoint list', 'danger');
+                });
             });
 
             // WiFi Station IP configuration
@@ -1167,20 +1285,23 @@
                                 <div class="col">
                                     <label>Mountpoint</label>
                                     <div class="input-group">
-                                        <input type="text" name="ntr_cli_mp" class="form-control" maxlength="32" required>
-                                        <!--<div class="input-group-append">
-                                            <button type="button" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-toggle="dropdown"></button>
-                                            <div class="dropdown-menu">
-                                                <a class="dropdown-item" href="#">Action</a>
-                                                <a class="dropdown-item" href="#">Another action</a>
-                                                <a class="dropdown-item" href="#">Something else here</a>
-                                                <div role="separator" class="dropdown-divider"></div>
-                                                <a class="dropdown-item" href="#">Separated link</a>
+                                        <input type="text" name="ntr_cli_mp" class="ntrip-mountpoints-mp form-control" maxlength="32" required>
+                                        <div class="input-group-append">
+                                            <button type="button" class="ntrip-mountpoints-dropdown btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" data-toggle="dropdown" disabled></button>
+                                            <div class="ntrip-mountpoints dropdown-menu dropdown-menu-right" style="max-height: 50vh; overflow-y: auto">
+                                                <span class="ntrip-mountpoints-message">
+                                                </span>
+                                                <h6 class="dropdown-header">Open mountpoints</h6>
+                                                <span class="ntrip-mountpoints-open">
+                                                </span>
+                                                <h6 class="dropdown-header">Login required</h6>
+                                                <span class="ntrip-mountpoints-secured">
+                                                </span>
                                             </div>
                                         </div>
                                         <div class="input-group-append">
-                                            <button type="button" class="btn btn-outline-secondary">Search</button>
-                                        </div>-->
+                                            <button type="button" class="ntrip-mountpoints-scan btn btn-outline-secondary" title="Get the mountpoint list from the caster">Scan</button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

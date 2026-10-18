@@ -181,7 +181,7 @@ static void ntrip_client_task(void *ctx) {
         }
 
         // Disconnected
-        xEventGroupSetBits(client_event_group, CASTER_READY_BIT);
+        xEventGroupClearBits(client_event_group, CASTER_READY_BIT);
 
         // Stop sending GGA to caster
         vTaskDelete(nmea_gga_send_task);

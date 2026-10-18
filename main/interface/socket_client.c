@@ -91,7 +91,7 @@ static void socket_client_task(void *ctx) {
         char *buffer = malloc(BUFFER_SIZE);
 
         int len;
-        while ((len = read(sock, buffer, BUFFER_SIZE)) >= 0) {
+        while ((len = read(sock, buffer, BUFFER_SIZE)) > 0) {
             uart_write(buffer, len);
 
             stream_stats_increment(stream_stats, len, 0);
@@ -101,7 +101,7 @@ static void socket_client_task(void *ctx) {
 
         if (status_led != NULL) status_led->active = false;
 
-        ESP_LOGW(TAG, "Disconnected from %s:%d: %d %s", host, port, errno, strerror(errno));
+        ESP_LOGW(TAG, "Disconnected from %s:%d: %s", host, port, len == 0 ? "connection closed by host" : strerror(errno));
         uart_nmea("$PESP,SOCK,CLI,%s,DISCONNECTED,%s:%d", SOCKTYPE_NAME(socktype), host, port);
 
         _error:

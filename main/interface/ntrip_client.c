@@ -171,8 +171,8 @@ static void ntrip_client_task(void *ctx) {
         // Connected
         xEventGroupSetBits(client_event_group, CASTER_READY_BIT);
 
-        // Read from socket until disconnected
-        while (sock != -1 && (len = read(sock, buffer, BUFFER_SIZE)) >= 0) {
+        // Read from socket until disconnected (0 = closed by caster, -1 = error/timeout)
+        while (sock != -1 && (len = read(sock, buffer, BUFFER_SIZE)) > 0) {
             uart_write(buffer, len);
 
             rtk_status_rtcm_feed((uint8_t *) buffer, len);

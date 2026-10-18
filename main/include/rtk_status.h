@@ -33,7 +33,6 @@ typedef struct rtk_status {
 void rtk_status_init();
 
 void rtk_status_rtcm_feed(const uint8_t *data, size_t length);
-void rtk_status_nmea_feed(const uint8_t *data, size_t length);
 void rtk_status_base_reset();
 
 bool rtk_status_get(rtk_status_t *status);

@@ -37,6 +37,7 @@
 #include "uart.h"
 #include "interface/ntrip.h"
 #include "tasks.h"
+#include "rtk_status.h"
 
 static const char *TAG = "MAIN";
 
@@ -130,6 +131,8 @@ void app_main()
     web_server_init();
 
     esp_ota_mark_app_valid_cancel_rollback();
+
+    rtk_status_init();
 
     ntrip_caster_init();
     ntrip_server_init();

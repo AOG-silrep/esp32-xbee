@@ -98,7 +98,7 @@ static void rtk_status_nmea_line_complete() {
     xQueueSend(nmea_line_queue, nmea_line, 0);
 }
 
-void rtk_status_nmea_feed(const uint8_t *data, size_t length) {
+static void rtk_status_nmea_feed(const uint8_t *data, size_t length) {
     for (size_t i = 0; i < length; i++) {
         char c = data[i];
 
@@ -117,6 +117,10 @@ void rtk_status_nmea_feed(const uint8_t *data, size_t length) {
 
         nmea_line[nmea_line_length++] = c;
     }
+}
+
+static void rtk_status_uart_handler(void* handler_args, esp_event_base_t base, int32_t length, void* buffer) {
+    rtk_status_nmea_feed(buffer, length);
 }
 
 static void rtk_status_nmea_parse(const char *line) {
@@ -256,4 +260,6 @@ void rtk_status_init() {
     initialized = true;
 
     xTaskCreate(rtk_status_task, "rtk_status_task", 6144, NULL, TASK_PRIORITY_INTERFACE, NULL);
+
+    uart_register_read_handler(rtk_status_uart_handler);
 }

@@ -85,8 +85,6 @@ static void ntrip_client_nmea_gga_send_task(void *ctx) {
 }
 
 static void ntrip_client_uart_handler(void* handler_args, esp_event_base_t base, int32_t length, void* buffer) {
-    rtk_status_nmea_feed(buffer, length);
-
     // Caster connected and ready for data
     if ((xEventGroupGetBits(client_event_group) & CASTER_READY_BIT) == 0) return;
 
@@ -206,8 +204,6 @@ static void ntrip_client_task(void *ctx) {
 
 void ntrip_client_init() {
     if (!config_get_bool1(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_ACTIVE))) return;
-
-    rtk_status_init();
 
     xTaskCreate(ntrip_client_task, "ntrip_client_task", 4096, NULL, TASK_PRIORITY_INTERFACE, NULL);
 }

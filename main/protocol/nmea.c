@@ -145,3 +145,20 @@ bool nmea_parse_gst(const char *sentence, nmea_gst_t *gst) {
 
     return true;
 }
+
+bool nmea_parse_gsa(const char *sentence, nmea_gsa_t *gsa) {
+    char copy[NMEA_SENTENCE_MAX_LENGTH];
+    char *fields[NMEA_MAX_FIELDS];
+
+    // $--GSA,opMode,navMode,svid x12,pdop,hdop,vdop[,systemId], one per GNSS in multi-GNSS operation
+    int count = nmea_split(sentence, "GSA", copy, sizeof(copy), fields, NMEA_MAX_FIELDS);
+    if (count < 18) return false;
+
+    *gsa = (nmea_gsa_t) {
+            .pdop = nmea_field_double(fields[15]),
+            .hdop = nmea_field_double(fields[16]),
+            .vdop = nmea_field_double(fields[17])
+    };
+
+    return true;
+}

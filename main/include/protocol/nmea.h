@@ -22,10 +22,17 @@ typedef struct nmea_gst {
     double sigma_altitude;
 } nmea_gst_t;
 
+typedef struct nmea_gsa {
+    double pdop; // NAN if empty
+    double hdop;
+    double vdop;
+} nmea_gsa_t;
+
 int nmea_asprintf(char **strp, const char *fmt, ...);
 int nmea_vasprintf(char **strp, const char *fmt, va_list args);
 
 bool nmea_parse_gga(const char *sentence, nmea_gga_t *gga);
 bool nmea_parse_gst(const char *sentence, nmea_gst_t *gst);
+bool nmea_parse_gsa(const char *sentence, nmea_gsa_t *gsa);
 
 #endif //ESP32_XBEE_NMEA_H

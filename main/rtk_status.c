@@ -32,7 +32,8 @@
 static const char *TAG = "RTK_STATUS";
 
 #define NMEA_LINE_MAX_LENGTH 128
-#define NMEA_LINE_QUEUE_LENGTH 4
+// A UART chunk can hold a whole epoch: GGA, one GSA per GNSS and GST
+#define NMEA_LINE_QUEUE_LENGTH 16
 
 #define REPORT_INTERVAL_MS 5000
 #define REPORT_MAX_AGE 10.0
@@ -49,6 +50,10 @@ typedef struct rtk_state {
     bool gst_valid;
     nmea_gst_t gst;
     int64_t gst_time;
+
+    bool gsa_valid;
+    nmea_gsa_t gsa;
+    int64_t gsa_time;
 } rtk_state_t;
 
 static bool initialized = false;
@@ -93,7 +98,8 @@ static void rtk_status_nmea_line_complete() {
     nmea_line[nmea_line_length] = '\0';
 
     if (nmea_line_length < 7) return;
-    if (strncmp(nmea_line + 3, "GGA,", 4) != 0 && strncmp(nmea_line + 3, "GST,", 4) != 0) return;
+    if (strncmp(nmea_line + 3, "GGA,", 4) != 0 && strncmp(nmea_line + 3, "GST,", 4) != 0 &&
+            strncmp(nmea_line + 3, "GSA,", 4) != 0) return;
 
     xQueueSend(nmea_line_queue, nmea_line, 0);
 }
@@ -126,6 +132,7 @@ static void rtk_status_uart_handler(void* handler_args, esp_event_base_t base, i
 static void rtk_status_nmea_parse(const char *line) {
     nmea_gga_t gga;
     nmea_gst_t gst;
+    nmea_gsa_t gsa;
 
     int64_t time = esp_timer_get_time();
 
@@ -140,6 +147,13 @@ static void rtk_status_nmea_parse(const char *line) {
         state.gst = gst;
         state.gst_valid = true;
         state.gst_time = time;
+        taskEXIT_CRITICAL(&state_lock);
+    } else if (nmea_parse_gsa(line, &gsa)) {
+        // One GSA per GNSS in multi-GNSS operation, the latest wins
+        taskENTER_CRITICAL(&state_lock);
+        state.gsa = gsa;
+        state.gsa_valid = true;
+        state.gsa_time = time;
         taskEXIT_CRITICAL(&state_lock);
     }
 }
@@ -163,7 +177,10 @@ bool rtk_status_get(rtk_status_t *status) {
             .gga_age = (now - snapshot.gga_time) / 1e6,
             .gst_valid = snapshot.gst_valid,
             .gst = snapshot.gst,
-            .gst_age = (now - snapshot.gst_time) / 1e6
+            .gst_age = (now - snapshot.gst_time) / 1e6,
+            .gsa_valid = snapshot.gsa_valid,
+            .gsa = snapshot.gsa,
+            .gsa_age = (now - snapshot.gsa_time) / 1e6
     };
 
     const nmea_gga_t *gga = &snapshot.gga;

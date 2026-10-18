@@ -730,6 +730,12 @@ static void rtk_status_json(cJSON *root) {
         cJSON_AddNumberToObject(gst, "age", status.gst_age);
     }
 
+    if (status.gsa_valid) {
+        cJSON *gsa = cJSON_AddObjectToObject(rtk, "gsa");
+        json_add_number_if_valid(gsa, "vdop", status.gsa.vdop);
+        cJSON_AddNumberToObject(gsa, "age", status.gsa_age);
+    }
+
     if (status.distance_valid) {
         cJSON *distance = cJSON_AddObjectToObject(rtk, "distance");
         cJSON_AddNumberToObject(distance, "d3", status.distance_3d);

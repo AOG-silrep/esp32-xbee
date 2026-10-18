@@ -410,6 +410,7 @@
                 if (typeof rtk !== 'undefined') {
                     var rover = rtk.rover;
                     var gst = rtk.gst;
+                    var gsa = rtk.gsa;
 
                     if (!rover) {
                         addPart(uartGpsText, 'No GGA from receiver', 'muted');
@@ -422,6 +423,11 @@
                         if (typeof rover.hdop !== 'undefined') {
                             addPart(uartGpsText, 'HDOP ' + rover.hdop.toFixed(2), null, roverStale);
                         }
+                    }
+
+                    if (gsa && typeof gsa.vdop !== 'undefined') {
+                        addPart(uartGpsText, 'VDOP ' + gsa.vdop.toFixed(2) + staleSuffix(gsa.age, RTK_STALE_SECONDS), null,
+                            isStale(gsa.age, RTK_STALE_SECONDS), 'Vertical dilution of precision (GSA)');
                     }
 
                     if (gst) {

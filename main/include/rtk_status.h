@@ -23,6 +23,10 @@ typedef struct rtk_status {
     nmea_gst_t gst;
     double gst_age;
 
+    bool gsa_valid;
+    nmea_gsa_t gsa;
+    double gsa_age;
+
     // Rover relative to base, in the base's local east/north/up frame
     bool distance_valid;
     double distance_3d; // Metres

@@ -38,6 +38,7 @@
 #include "interface/ntrip.h"
 #include "tasks.h"
 #include "rtk_status.h"
+#include "f9p_config.h"
 
 static const char *TAG = "MAIN";
 
@@ -133,6 +134,7 @@ void app_main()
     esp_ota_mark_app_valid_cancel_rollback();
 
     rtk_status_init();
+    f9p_config_init();
 
     ntrip_caster_init();
     ntrip_server_init();

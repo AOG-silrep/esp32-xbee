@@ -15,6 +15,8 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <inttypes.h>
+#include <limits.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -34,6 +36,7 @@
 #include <esp_wifi_ap_get_sta_list.h>
 #include <stream_stats.h>
 #include <rtk_status.h>
+#include <f9p_config.h>
 #include <esp32/rom/crc.h>
 #include <lwip/sockets.h>
 #include <esp_timer.h>
@@ -47,7 +50,7 @@
 
 #define WWW_PARTITION_PATH "/www"
 #define WWW_PARTITION_LABEL "www"
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 4096
 
 static const char *TAG = "WEB";
 
@@ -1006,6 +1009,179 @@ static esp_err_t ntrip_sourcetable_post_handler(httpd_req_t *req) {
     return err;
 }
 
+// Whole number or string of digits, -1 if neither
+static int json_int(const cJSON *item) {
+    if (cJSON_IsNumber(item)) return item->valuedouble == (double) item->valueint ? item->valueint : -1;
+    if (cJSON_IsString(item) && strlen(item->valuestring) > 0) {
+        char *end;
+        long value = strtol(item->valuestring, &end, 10);
+        return *end == '\0' && value >= 0 && value <= INT_MAX ? (int) value : -1;
+    }
+    return -1;
+}
+
+// Receiver settings from the request body, sends the error response if they are missing or invalid
+static esp_err_t f9p_settings_from_request(httpd_req_t *req, f9p_settings_t *settings) {
+    int ret = httpd_req_recv(req, buffer, BUFFER_SIZE - 1);
+    if (ret <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+
+        return ESP_FAIL;
+    }
+
+    buffer[ret] = '\0';
+
+    cJSON *request = cJSON_Parse(buffer);
+    cJSON *mode_item = cJSON_GetObjectItem(request, "mode");
+    bool dual = cJSON_IsString(mode_item) && strcmp(mode_item->valuestring, "dual") == 0;
+    bool rs232 = cJSON_IsString(mode_item) && strcmp(mode_item->valuestring, "rs232") == 0;
+    int gga = json_int(cJSON_GetObjectItem(request, "gga"));
+    int vtg = json_int(cJSON_GetObjectItem(request, "vtg"));
+    int rmc = json_int(cJSON_GetObjectItem(request, "rmc"));
+    int gsa = json_int(cJSON_GetObjectItem(request, "gsa"));
+    int baud = json_int(cJSON_GetObjectItem(request, "baud"));
+    cJSON_Delete(request);
+
+    *settings = (f9p_settings_t) {
+            .mode = rs232 ? F9P_MODE_RS232 : F9P_MODE_DUAL,
+            .gga_hz = gga,
+            .vtg_hz = vtg,
+            .rmc_hz = rmc,
+            .gsa_hz = gsa,
+            .uart2_baud = baud
+    };
+
+    if (!(dual || rs232) || !f9p_settings_valid(settings)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Mode must be dual or rs232, rates 0, 1, 2, 5 or 10 Hz "
+                "up to GGA 10, VTG 5, RMC 2 and GSA 1 Hz, baud 19200 or 38400");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t f9p_config_post_handler(httpd_req_t *req) {
+    if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
+
+    f9p_settings_t settings;
+    if (f9p_settings_from_request(req, &settings) != ESP_OK) return ESP_FAIL;
+
+    f9p_result_t result;
+    esp_err_t err = f9p_config_write(&settings, &result);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", err == ESP_OK);
+    cJSON_AddNumberToObject(root, "keys", result.keys);
+    cJSON_AddNumberToObject(root, "total", result.total);
+    cJSON *rejected = cJSON_AddArrayToObject(root, "rejected");
+    for (int i = 0; i < result.rejected_count; i++) {
+        char key[11];
+        snprintf(key, sizeof(key), "0x%08" PRIX32, result.rejected[i]);
+        cJSON_AddItemToArray(rejected, cJSON_CreateString(key));
+    }
+    if (result.error != NULL) cJSON_AddStringToObject(root, "error", result.error);
+
+    return json_response(req, root);
+}
+
+static void f9p_state_json(cJSON *root, const char *name, const f9p_state_t *state) {
+    if (!state->present) {
+        cJSON_AddNullToObject(root, name);
+        return;
+    }
+
+    cJSON *object = cJSON_AddObjectToObject(root, name);
+    if (state->mode == F9P_MODE_DUAL) {
+        cJSON_AddStringToObject(object, "mode", "dual");
+    } else if (state->mode == F9P_MODE_RS232) {
+        cJSON_AddStringToObject(object, "mode", "rs232");
+    } else {
+        cJSON_AddNullToObject(object, "mode");
+    }
+
+    cJSON *out = cJSON_AddObjectToObject(object, "out");
+    cJSON_AddBoolToObject(out, "ubx", state->out_ubx);
+    cJSON_AddBoolToObject(out, "nmea", state->out_nmea);
+    cJSON_AddBoolToObject(out, "rtcm3", state->out_rtcm3);
+
+    cJSON_AddNumberToObject(object, "baud", state->uart2_baud);
+    cJSON_AddNumberToObject(object, "nav_hz", state->nav_hz);
+    cJSON_AddNumberToObject(object, "gga", state->gga_hz);
+    cJSON_AddNumberToObject(object, "vtg", state->vtg_hz);
+    cJSON_AddNumberToObject(object, "rmc", state->rmc_hz);
+    cJSON_AddNumberToObject(object, "gsa", state->gsa_hz);
+}
+
+static esp_err_t f9p_config_get_handler(httpd_req_t *req) {
+    if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
+
+    f9p_state_t ram, flash;
+    const char *error;
+    esp_err_t err = f9p_config_read(&ram, &flash, &error);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", err == ESP_OK);
+    if (error != NULL) cJSON_AddStringToObject(root, "error", error);
+    if (err == ESP_OK) {
+        f9p_state_json(root, "ram", &ram);
+        f9p_state_json(root, "flash", &flash);
+    }
+
+    return json_response(req, root);
+}
+
+static void f9p_check_json(cJSON *root, const char *name, const f9p_check_t *check) {
+    cJSON *object = cJSON_AddObjectToObject(root, name);
+    cJSON_AddNumberToObject(object, "differ", check->differ);
+    cJSON_AddNumberToObject(object, "missing", check->missing);
+
+    // 64 bit values as strings, JSON numbers lose precision past 2^53
+    cJSON *keys = cJSON_AddArrayToObject(object, "keys");
+    for (int i = 0; i < check->count; i++) {
+        const f9p_difference_t *difference = &check->keys[i];
+        char text[24];
+
+        cJSON *key = cJSON_CreateObject();
+        snprintf(text, sizeof(text), "0x%08" PRIX32, difference->key);
+        cJSON_AddStringToObject(key, "key", text);
+        snprintf(text, sizeof(text), "%" PRIu64, difference->expected);
+        cJSON_AddStringToObject(key, "expected", text);
+        if (difference->missing) {
+            cJSON_AddNullToObject(key, "actual");
+        } else {
+            snprintf(text, sizeof(text), "%" PRIu64, difference->actual);
+            cJSON_AddStringToObject(key, "actual", text);
+        }
+
+        cJSON_AddItemToArray(keys, key);
+    }
+}
+
+static esp_err_t f9p_check_post_handler(httpd_req_t *req) {
+    if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
+
+    f9p_settings_t settings;
+    if (f9p_settings_from_request(req, &settings) != ESP_OK) return ESP_FAIL;
+
+    // Too large for the web server task's stack
+    static f9p_check_t ram, flash;
+    const char *error;
+    esp_err_t err = f9p_config_check(&settings, &ram, &flash, &error);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", err == ESP_OK);
+    if (error != NULL) cJSON_AddStringToObject(root, "error", error);
+    if (err == ESP_OK) {
+        cJSON_AddNumberToObject(root, "total", ram.total);
+        f9p_check_json(root, "ram", &ram);
+        f9p_check_json(root, "flash", &flash);
+    }
+
+    return json_response(req, root);
+}
+
 static esp_err_t ota_post_handler(httpd_req_t *req) {
     if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
 
@@ -1094,7 +1270,7 @@ static httpd_handle_t web_server_start(void)
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 15;
 
     // Start the httpd server
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -1111,6 +1287,10 @@ static httpd_handle_t web_server_start(void)
         register_uri_handler(server, "/wifi/scan", HTTP_GET, wifi_scan_get_handler);
 
         register_uri_handler(server, "/ntrip/sourcetable", HTTP_POST, ntrip_sourcetable_post_handler);
+
+        register_uri_handler(server, "/f9p/config", HTTP_GET, f9p_config_get_handler);
+        register_uri_handler(server, "/f9p/config", HTTP_POST, f9p_config_post_handler);
+        register_uri_handler(server, "/f9p/check", HTTP_POST, f9p_check_post_handler);
 
         register_uri_handler(server, "/ota", HTTP_POST, ota_post_handler);
 

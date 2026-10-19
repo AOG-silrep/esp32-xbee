@@ -51,6 +51,7 @@ void uart_unregister_write_handler(esp_event_handler_t event_handler) {
 
 static int uart_port = -1;
 static bool uart_log_forward = false;
+static volatile bool uart_exclusive = false;
 
 static stream_stats_handle_t stream_stats;
 
@@ -136,7 +137,27 @@ int uart_nmea(const char *fmt, ...) {
     return l;
 }
 
+void uart_set_exclusive(bool exclusive) {
+    uart_exclusive = exclusive;
+
+    // Let a write that started before exclusive use was claimed finish first
+    if (exclusive && uart_port >= 0) uart_wait_tx_done(uart_port, pdMS_TO_TICKS(1000));
+}
+
+static int uart_write_internal(char *buf, size_t len);
+
 int uart_write(char *buf, size_t len) {
+    // Dropped while the UART is claimed, e.g. to configure the receiver
+    if (uart_exclusive) return 0;
+
+    return uart_write_internal(buf, len);
+}
+
+int uart_write_exclusive(char *buf, size_t len) {
+    return uart_write_internal(buf, len);
+}
+
+static int uart_write_internal(char *buf, size_t len) {
     if (uart_port < 0) return 0;
     if (len == 0) return 0;
 

@@ -1,6 +1,7 @@
-idf_component_register(SRCS "main.c"
+idf_component_register(SRCS "f9p_config.c" "main.c"
 		"config.c"
 		"core_dump.c"
+		"f9p_config.c"
 		"geodesy.c"
 		"log.c"
 		"interface/ntrip_util.c"

@@ -1,6 +1,7 @@
 #ifndef ESP32_XBEE_UART_H
 #define ESP32_XBEE_UART_H
 
+#include <stdbool.h>
 #include <esp_event.h>
 
 ESP_EVENT_DECLARE_BASE(UART_EVENT_READ);
@@ -14,6 +15,10 @@ void uart_inject(void *data, size_t len);
 int uart_log(char *buffer, size_t len);
 int uart_nmea(const char *fmt, ...);
 int uart_write(char *buffer, size_t len);
+
+// While exclusive, uart_write() drops data and only uart_write_exclusive() reaches the UART
+void uart_set_exclusive(bool exclusive);
+int uart_write_exclusive(char *buffer, size_t len);
 
 void uart_register_read_handler(esp_event_handler_t event_handler);
 void uart_register_write_handler(esp_event_handler_t event_handler);

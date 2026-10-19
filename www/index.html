@@ -1,5 +1,6 @@
 <html>
 <head>
+    <meta charset="utf-8">
     <title>ESP32 NTRIP config</title>
     <script src="jquery-3.4.1.min.js"></script>
     <script src="bs-4.3.1.bundle.min.js"></script>
@@ -728,6 +729,220 @@
                     ntripMountpointsShow(xhr.responseText || 'Could not get the mountpoint list', 'danger');
                 });
             });
+
+            // F9P receiver configuration, read from and written to the receiver over the UART
+            var f9pModeInputs = form.find('input[name="f9p_mode"]');
+            var f9pModeHelpTexts = form.find('.f9p-mode-help');
+            var f9pCheckButton = form.find('.f9p-check');
+            var f9pWriteButton = form.find('.f9p-write');
+            var f9pButtons = f9pCheckButton.add(f9pWriteButton);
+            var f9pResultText = form.find('.f9p-result');
+            var f9pModeNames = {dual: 'Dual GPS', rs232: 'RS-232'};
+            var f9pRates = [['gga', 'GGA'], ['vtg', 'VTG'], ['rmc', 'RMC'], ['gsa', 'GSA']];
+
+            var f9pModeHelp = function() {
+                var mode = f9pModeInputs.filter(':checked').val();
+                f9pModeHelpTexts.each(function() {
+                    $(this).toggle(String($(this).data('mode')) === mode);
+                });
+            };
+            f9pModeInputs.on('change', f9pModeHelp);
+
+            // Footer lines, each [text, color class]
+            var f9pShowLines = function(lines) {
+                f9pResultText.empty();
+                lines.forEach(function(line) {
+                    $('<span>', {class: 'd-block text-' + line[1], text: line[0]}).appendTo(f9pResultText);
+                });
+                toggleFooter(f9pResultText);
+            };
+
+            var f9pHz = (hz) => hz === 0 ? 'off' : (Math.round(hz * 100) / 100) + ' Hz';
+
+            // Nearest option of a select, ties go to the lower one as the options are in ascending order
+            var f9pNearestOption = function(select, value) {
+                var nearest = null;
+                select.find('option').each(function() {
+                    var option = parseFloat(this.value);
+                    if (nearest === null || Math.abs(option - value) < Math.abs(nearest - value)) nearest = option;
+                });
+                return nearest;
+            };
+
+            var f9pSelection = function() {
+                return {
+                    mode: f9pModeInputs.filter(':checked').val() === '1' ? 'rs232' : 'dual',
+                    gga: parseInt(form.find('select[name="f9p_gga_hz"]').val()),
+                    vtg: parseInt(form.find('select[name="f9p_vtg_hz"]').val()),
+                    rmc: parseInt(form.find('select[name="f9p_rmc_hz"]').val()),
+                    gsa: parseInt(form.find('select[name="f9p_gsa_hz"]').val()),
+                    baud: parseInt(form.find('select[name="f9p_u2_baud"]').val())
+                };
+            };
+
+            // Sets the panel to what the receiver has, snapping values it can't select to the nearest option
+            var f9pShowState = function(ram, flash) {
+                var lines = [];
+
+                if (ram.mode) {
+                    f9pModeInputs.each(function() {
+                        var active = $(this).val() === (ram.mode === 'rs232' ? '1' : '0');
+                        $(this).prop('checked', active).parent('.btn').toggleClass('active', active);
+                    });
+                    f9pModeInputs.filter(':checked').trigger('change');
+                    lines.push(['Receiver is in ' + f9pModeNames[ram.mode] + ' mode', 'success']);
+                } else {
+                    var outputs = ['ubx', 'nmea', 'rtcm3'].filter((name) => ram.out[name]).map((name) => name.toUpperCase());
+                    lines.push(['Receiver is in neither mode, UART2 outputs ' +
+                        (outputs.length > 0 ? outputs.join(', ') : 'nothing'), 'warning']);
+                }
+
+                if (Math.abs(ram.nav_hz - 10) > 0.01) {
+                    lines.push(['Receiver measures at ' + f9pHz(ram.nav_hz) + ' instead of 10 Hz', 'warning']);
+                }
+
+                // Rates and baud only matter while UART2 outputs NMEA
+                if (ram.out.nmea) {
+                    f9pRates.forEach(function(rate) {
+                        var select = form.find('select[name="f9p_' + rate[0] + '_hz"]');
+                        var shown = f9pNearestOption(select, ram[rate[0]]);
+                        select.val(String(shown));
+                        if (Math.abs(shown - ram[rate[0]]) > 0.01) {
+                            lines.push(['Receiver has ' + rate[1] + ' ' + f9pHz(ram[rate[0]]) + ', shown as ' + f9pHz(shown), 'warning']);
+                        }
+                    });
+
+                    var baudSelect = form.find('select[name="f9p_u2_baud"]');
+                    var baud = f9pNearestOption(baudSelect, ram.baud);
+                    baudSelect.val(String(baud));
+                    if (baud !== ram.baud) {
+                        lines.push(['Receiver has UART2 at ' + ram.baud + ' baud, shown as ' + baud, 'warning']);
+                    }
+                }
+
+                if (!flash) {
+                    lines.push(['Receiver\'s flash doesn\'t hold these settings, a power cycle may change them', 'warning']);
+                } else {
+                    var differ = [];
+                    if (flash.mode !== ram.mode) differ.push('mode');
+                    if (flash.baud !== ram.baud) differ.push('UART2 baud');
+                    f9pRates.forEach(function(rate) {
+                        if (Math.abs(flash[rate[0]] - ram[rate[0]]) > 0.01) differ.push(rate[1]);
+                    });
+                    if (differ.length > 0) {
+                        lines.push(['Saved settings (flash) differ from the active ones: ' + differ.join(', '), 'warning']);
+                    }
+                }
+
+                return lines;
+            };
+
+            // Reads the receiver into the panel, lines are shown above what was read
+            var f9pRead = function(lines) {
+                lines = lines || [];
+                f9pButtons.prop('disabled', true);
+                f9pShowLines(lines.concat([['Reading the receiver…', 'muted']]));
+
+                $.ajax({
+                    url: 'f9p/config',
+                    dataType: 'json',
+                    timeout: 30000
+                }).always(function() {
+                    f9pButtons.prop('disabled', false);
+                }).done(function(data) {
+                    if (!data.success) {
+                        f9pShowLines(lines.concat([[data.error, 'danger']]));
+                    } else if (!data.ram) {
+                        f9pShowLines(lines.concat([['Receiver did not report all of its settings', 'danger']]));
+                    } else {
+                        f9pShowLines(lines.concat(f9pShowState(data.ram, data.flash)));
+                    }
+                }).fail(function(xhr) {
+                    f9pShowLines(lines.concat([[xhr.responseText || 'Could not reach the ESP32', 'danger']]));
+                });
+            };
+
+            var f9pCheckCount = (layer) => layer.differ + ' differ' + (layer.missing > 0 ? ', ' + layer.missing + ' missing' : '');
+
+            f9pCheckButton.on('click', function() {
+                f9pButtons.prop('disabled', true);
+                f9pShowLines([['Checking every receiver setting…', 'muted']]);
+
+                $.ajax({
+                    url: 'f9p/check',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    dataType: 'json',
+                    timeout: 120000,
+                    data: JSON.stringify(f9pSelection())
+                }).always(function() {
+                    f9pButtons.prop('disabled', false);
+                }).done(function(data) {
+                    if (!data.success) {
+                        f9pShowLines([[data.error, 'danger']]);
+                        return;
+                    }
+
+                    var layers = [['Active', data.ram], ['Saved', data.flash]];
+                    if (layers.every((layer) => layer[1].differ + layer[1].missing === 0)) {
+                        f9pShowLines([['Receiver matches the selected config, active and saved, all ' + data.total + ' keys', 'success']]);
+                        return;
+                    }
+
+                    var lines = [['Receiver differs from the selected config: active ' + f9pCheckCount(data.ram) +
+                        ', saved ' + f9pCheckCount(data.flash) + ' of ' + data.total + ' keys', 'warning']];
+                    layers.forEach(function(layer) {
+                        layer[1].keys.forEach(function(key) {
+                            lines.push([layer[0] + ' ' + key.key + ': expected ' + key.expected + ', receiver ' +
+                                (key.actual === null ? 'missing' : key.actual), 'muted']);
+                        });
+
+                        var unlisted = layer[1].differ + layer[1].missing - layer[1].keys.length;
+                        if (unlisted > 0) lines.push([layer[0] + ': ' + unlisted + ' more not listed', 'muted']);
+                    });
+                    f9pShowLines(lines);
+                }).fail(function(xhr) {
+                    f9pShowLines([[xhr.responseText || 'Could not reach the ESP32', 'danger']]);
+                });
+            });
+
+            f9pWriteButton.on('click', function() {
+                var selection = f9pSelection();
+                if (!confirm("Write the " + f9pModeNames[selection.mode] + " configuration to the F9P?\n\n" +
+                        "This replaces the configuration saved in the receiver. NTRIP corrections to the receiver " +
+                        "pause for a few seconds while it is written.")) return;
+
+                f9pButtons.prop('disabled', true);
+                f9pShowLines([['Writing configuration…', 'muted']]);
+
+                $.ajax({
+                    url: 'f9p/config',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    dataType: 'json',
+                    timeout: 120000,
+                    data: JSON.stringify(selection)
+                }).always(function() {
+                    f9pButtons.prop('disabled', false);
+                }).done(function(data) {
+                    var keys = data.keys + ' of ' + data.total + ' keys';
+                    var refused = data.rejected.length > 0 ? ', refused ' + data.rejected.join(' ') : '';
+                    var line = data.success ?
+                        ['Written, ' + keys + refused, data.rejected.length > 0 ? 'warning' : 'success'] :
+                        [data.error + ' (' + keys + ' written' + refused + ')', 'danger'];
+
+                    // Show what the receiver ended up with, unless nothing reached it
+                    if (data.keys > 0) {
+                        f9pRead([line]);
+                    } else {
+                        f9pShowLines([line]);
+                    }
+                }).fail(function(xhr) {
+                    f9pShowLines([[xhr.responseText || 'Could not reach the ESP32', 'danger']]);
+                });
+            });
+
+            f9pRead();
 
             // WiFi Station IP configuration
             var wifiStaSubnetInput = form.find('input[name="w_sta_subnet"]');
@@ -1569,6 +1784,93 @@
                         <div class="card-body">
                             <a href="log.html" class="btn btn-primary">View log</a>
                             <button type="button" class="btn btn-danger mt-2 d-block" id="reset-submit" data-toggle="modal" data-target="#reset-modal">Reset to defaults</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col">
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            F9P receiver
+                            <small class="text-muted">configured over the UART</small>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-row mb-2">
+                                <div class="col">
+                                    <label class="d-block">Mode</label>
+                                    <div class="btn-group btn-group-toggle d-flex" data-toggle="buttons">
+                                        <label class="btn btn-outline-secondary active">
+                                            <input type="radio" name="f9p_mode" value="0" form="f9p-form" checked> Dual GPS
+                                        </label>
+                                        <label class="btn btn-outline-secondary">
+                                            <input type="radio" name="f9p_mode" value="1" form="f9p-form"> RS-232
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="f9p-mode-help small text-muted mb-3" data-mode="0">
+                                UART1 to NTRIP: NAV-PVT and GGA 10&nbsp;Hz, VTG, GSA and GST 1&nbsp;Hz.
+                                UART2: RTCM3 moving base to the second F9P at 460800&nbsp;baud.
+                            </p>
+                            <p class="f9p-mode-help small text-muted mb-3" data-mode="1" style="display: none">
+                                UART1 to NTRIP: GGA 10&nbsp;Hz, VTG, GSA and GST 1&nbsp;Hz.
+                                UART2: NMEA with the rates and baud rate below. USB: same as UART2.
+                            </p>
+                            <div class="form-row mb-3" data-disable-if="input[name='f9p_mode'][value='1']">
+                                <div class="col">
+                                    <label>GGA</label>
+                                    <select name="f9p_gga_hz" form="f9p-form" class="custom-select">
+                                        <option value="0">Off</option>
+                                        <option value="1">1 Hz</option>
+                                        <option value="2">2 Hz</option>
+                                        <option value="5">5 Hz</option>
+                                        <option value="10" selected>10 Hz</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    <label>VTG</label>
+                                    <select name="f9p_vtg_hz" form="f9p-form" class="custom-select">
+                                        <option value="0">Off</option>
+                                        <option value="1">1 Hz</option>
+                                        <option value="2">2 Hz</option>
+                                        <option value="5" selected>5 Hz</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    <label>RMC</label>
+                                    <select name="f9p_rmc_hz" form="f9p-form" class="custom-select">
+                                        <option value="0">Off</option>
+                                        <option value="1">1 Hz</option>
+                                        <option value="2" selected>2 Hz</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    <label>GSA</label>
+                                    <select name="f9p_gsa_hz" form="f9p-form" class="custom-select">
+                                        <option value="0">Off</option>
+                                        <option value="1" selected>1 Hz</option>
+                                    </select>
+                                </div>
+                                <div class="col">
+                                    <label>UART2 baud</label>
+                                    <select name="f9p_u2_baud" form="f9p-form" class="custom-select">
+                                        <option value="19200">19200</option>
+                                        <option value="38400" selected>38400</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="col">
+                                    <button type="button" class="f9p-check btn btn-outline-secondary btn-block">Check F9P</button>
+                                </div>
+                                <div class="col">
+                                    <button type="button" class="f9p-write btn btn-outline-warning btn-block">Write to F9P</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-footer py-1" style="display: none">
+                            <small class="f9p-result"></small>
                         </div>
                     </div>
                 </div>

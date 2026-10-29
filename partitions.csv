@@ -2,8 +2,6 @@
 nvs,      data, nvs,     ,        0x6000,
 otadata,  data, ota,     ,        0x2000,
 phy_init, data, phy,     ,        0x1000,
-ota_0,    app,  ota_0,   ,        1280K,
-ota_1,    app,  ota_1,   ,        1280K,
-# www is unused, the web UI is built into the app. Kept so OTA-updated devices keep the same layout.
-www,      data, spiffs,  ,        1M,
+ota_0,    app,  ota_0,   ,        1856K,
+ota_1,    app,  ota_1,   ,        1856K,
 coredump, data, coredump,,        192k,

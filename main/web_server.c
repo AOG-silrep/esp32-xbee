@@ -736,6 +736,10 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
             cJSON_AddStringToObject(sta, "ip4", ip);
             snprintf(ip, sizeof(ip), IPV6STR, IPV62STR(sta_status.ip6_addr));
             cJSON_AddStringToObject(sta, "ip6", ip);
+
+            cJSON_AddStringToObject(sta, "internet", wifi_internet_name(sta_status.internet));
+            if (sta_status.internet_ms >= 0) cJSON_AddNumberToObject(sta, "internet_ms", sta_status.internet_ms);
+            cJSON_AddStringToObject(sta, "internet_host", sta_status.internet_host);
         }
     }
 

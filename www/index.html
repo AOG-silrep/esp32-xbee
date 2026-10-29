@@ -342,6 +342,7 @@
             var wifiApStatusText = form.find('.wifi-ap-status');
             var wifiApStatusActiveInput = form.find('#status-wifi-ap-active');
             var wifiStaStatusText = form.find('.wifi-sta-status');
+            var wifiStaInternetText = form.find('.wifi-sta-internet');
 
             var streamStatsTexts = form.find('.stream-stats');
 
@@ -462,8 +463,12 @@
                     var base = rtk.base;
                     var rover = rtk.rover;
                     var distance = rtk.distance;
+                    var hasPosition = rover && rover.fix !== 0 && !isStale(rover.age, RTK_STALE_SECONDS);
 
-                    if (base) {
+                    if (!hasPosition) {
+                        // The client doesn't connect until there is one, an NTRIP mountpoint may send nothing without it
+                        addPart(ntripClientRtkText, 'Waiting for a GGA position from the receiver', 'warning');
+                    } else if (base) {
                         addPart(ntripClientRtkText, 'Base ' + base.station_id + staleSuffix(base.age, RTK_BASE_STALE_SECONDS), null,
                             isStale(base.age, RTK_BASE_STALE_SECONDS),
                             'RTCM ' + base.message_type + ' ECEF ' + base.ecef.map(v => v.toFixed(4)).join(', '));
@@ -471,9 +476,7 @@
                         addPart(ntripClientRtkText, 'Waiting for base position (RTCM 1005/1006)', 'muted');
                     }
 
-                    if (!rover) {
-                        addPart(ntripClientRtkText, 'No GGA from receiver', 'danger');
-                    } else {
+                    if (rover) {
                         var roverStale = isStale(rover.age, RTK_STALE_SECONDS);
 
                         if (distance) {
@@ -494,6 +497,34 @@
                 }
 
                 toggleFooter(ntripClientRtkText);
+            };
+
+            var wifiInternetStates = {
+                OK: ['Internet', 'success'],
+                CHECKING: ['Checking Internet…', 'muted'],
+                NO_DNS: ['No Internet (DNS failed)', 'danger'],
+                NO_REPLY: ['No ping reply from caster', 'warning', 'Some networks and casters drop pings, the NTRIP client still tries to connect'],
+                UNREACHABLE: ['No Internet', 'danger'],
+                PORTAL: ['Login page / captive portal', 'warning', 'The web check got a page back instead of an empty reply, the network may want you to log in']
+            };
+
+            // Internet health, from the NTRIP client pinging its caster or from the web check when the client is off
+            var wifiStaInternetUpdate = function(sta) {
+                wifiStaInternetText.empty();
+
+                if (sta.active && sta.connected) {
+                    if (sta.ip4 === '0.0.0.0') {
+                        addPart(wifiStaInternetText, 'Obtaining IP', 'muted');
+                    } else if (typeof sta.internet !== 'undefined') {
+                        var state = wifiInternetStates[sta.internet] || [sta.internet];
+
+                        addPart(wifiStaInternetText, state[0], state[1], false, state[2]);
+                        if (typeof sta.internet_ms !== 'undefined') addPart(wifiStaInternetText, sta.internet_ms + ' ms');
+                        if (sta.internet !== 'CHECKING' && sta.internet_host) addPart(wifiStaInternetText, sta.internet_host, 'muted');
+                    }
+                }
+
+                toggleFooter(wifiStaInternetText);
             };
 
             var statusUpdate = function() {
@@ -579,6 +610,7 @@
                             .appendText(" / ")
                             .append($('<span>', {class: 'text-' + wifiRssiColorClass(wifi.sta.rssi), text: wifi.sta.rssi + "dBm"}));
                     }
+                    wifiStaInternetUpdate(wifi.sta);
                 }).always(function() {
                     setTimeout(statusUpdate, 1000);
                 });
@@ -1211,6 +1243,9 @@
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                        <div class="card-footer py-1" style="display: none">
+                            <small class="wifi-sta-internet"></small>
                         </div>
                     </div>
                     <div class="card mb-3">

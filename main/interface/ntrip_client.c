@@ -27,6 +27,8 @@
 #include <rtk_status.h>
 #include <freertos/event_groups.h>
 #include <esp_ota_ops.h>
+#include <lwip/netdb.h>
+#include <ping/ping_sock.h>
 #include "interface/ntrip.h"
 #include "config.h"
 #include "util.h"
@@ -52,6 +54,84 @@ static status_led_handle_t status_led = NULL;
 static stream_stats_handle_t stream_stats = NULL;
 
 static char nmea_gga_latest[128] = "";
+
+static int caster_ping_ms = -1;
+
+#define CASTER_LOOKUP_ATTEMPTS 3
+#define CASTER_PING_COUNT 5
+
+#define GGA_MAX_AGE 10 // Seconds, same as the web UI's stale GGA
+
+static bool receiver_has_position() {
+    rtk_status_t status;
+    return rtk_status_get(&status) && status.gga_valid && status.gga_age < GGA_MAX_AGE && status.gga.fix_quality != 0;
+}
+
+typedef struct caster_ping_result {
+    TaskHandle_t task;
+    int ms;
+} caster_ping_result_t;
+
+static void caster_ping_success(esp_ping_handle_t ping, void *args) {
+    caster_ping_result_t *result = args;
+
+    uint32_t ms;
+    esp_ping_get_profile(ping, ESP_PING_PROF_TIMEGAP, &ms, sizeof(ms));
+    result->ms = ms;
+
+    // One reply is enough
+    esp_ping_stop(ping);
+}
+
+static void caster_ping_end(esp_ping_handle_t ping, void *args) {
+    xTaskNotifyGive(((caster_ping_result_t *) args)->task);
+}
+
+// Pings the caster and shows the result as the Internet health in the WiFi panel. Lookups and pings are retried,
+// as the odd one goes missing: rtn.dot.ny.gov has a 1 s DNS TTL so every lookup goes out to the network, and
+// firewalls often rate limit ICMP
+static wifi_internet_t caster_ping(const char *host) {
+    struct addrinfo hints = {.ai_family = AF_INET};
+    struct addrinfo *addr = NULL;
+    for (int attempt = 1; getaddrinfo(host, NULL, &hints, &addr) != 0 || addr == NULL; attempt++) {
+        if (attempt == CASTER_LOOKUP_ATTEMPTS) {
+            wifi_internet_set(WIFI_INTERNET_NO_DNS, -1, host);
+            return WIFI_INTERNET_NO_DNS;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    // Default 1 s apart and 1 s timeout
+    esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
+    config.count = CASTER_PING_COUNT;
+    ip_addr_set_ip4_u32(&config.target_addr, ((struct sockaddr_in *) addr->ai_addr)->sin_addr.s_addr);
+    freeaddrinfo(addr);
+
+    caster_ping_result_t result = {.task = xTaskGetCurrentTaskHandle(), .ms = -1};
+    esp_ping_callbacks_t callbacks = {
+            .cb_args = &result,
+            .on_ping_success = caster_ping_success,
+            .on_ping_end = caster_ping_end
+    };
+
+    esp_ping_handle_t ping;
+    if (esp_ping_new_session(&config, &callbacks, &ping) == ESP_OK) {
+        esp_ping_start(ping);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        esp_ping_delete_session(ping);
+    }
+
+    caster_ping_ms = result.ms;
+
+    if (result.ms < 0) {
+        wifi_internet_set(WIFI_INTERNET_NO_REPLY, -1, host);
+        return WIFI_INTERNET_NO_REPLY;
+    }
+
+    wifi_internet_set(WIFI_INTERNET_OK, result.ms, host);
+    return WIFI_INTERNET_OK;
+}
 
 static void nmea_gga_extract(int32_t length, void *buffer) {
     void *start = memmem(buffer, length, GPGGA_HEADER, strlen(GPGGA_HEADER));
@@ -85,10 +165,11 @@ static void ntrip_client_nmea_gga_send_task(void *ctx) {
 }
 
 static void ntrip_client_uart_handler(void* handler_args, esp_event_base_t base, int32_t length, void* buffer) {
+    // Also before connecting, so the caster gets a position as soon as it is connected
+    nmea_gga_extract(length, buffer);
+
     // Caster connected and ready for data
     if ((xEventGroupGetBits(client_event_group) & CASTER_READY_BIT) == 0) return;
-
-    nmea_gga_extract(length, buffer);
 
     /*int sent = send(sock, buffer, length, 0);
     if (sent < 0) {
@@ -108,7 +189,8 @@ static void ntrip_client_task(void *ctx) {
 
     stream_stats = stream_stats_new("ntrip_client");
 
-    retry_delay_handle_t delay_handle = retry_init(true, 5, 2000, 0);
+    // At most a minute between attempts, so corrections come back soon after the caster is reachable again
+    retry_delay_handle_t delay_handle = retry_init(true, 5, 2000, 60000);
 
     while (true) {
         retry_delay(delay_handle);
@@ -123,6 +205,36 @@ static void ntrip_client_task(void *ctx) {
         config_get_str_blob_alloc(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_USERNAME), (void **) &username);
         config_get_str_blob_alloc(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_PASSWORD), (void **) &password);
         config_get_str_blob_alloc(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_MOUNTPOINT), (void **) &mountpoint);
+
+        // Don't use up retries while the caster's name doesn't resolve. No ping reply alone doesn't stop the attempt,
+        // some networks drop pings now and then while the caster's port works fine
+        if (caster_ping(host) == WIFI_INTERNET_NO_DNS) {
+            ESP_LOGW(TAG, "Cannot resolve %s, waiting for Internet", host);
+            uart_nmea("$PESP,NTRIP,CLI,WAITING_INTERNET,%s", host);
+
+            do {
+                vTaskDelay(pdMS_TO_TICKS(10000));
+                wait_for_ip();
+            } while (caster_ping(host) == WIFI_INTERNET_NO_DNS);
+
+            retry_reset(delay_handle);
+        }
+
+        // An NTRIP mountpoint may send nothing until it gets a position, and casters may stop answering clients that
+        // keep reconnecting, so hold off until the receiver has one
+        if (!receiver_has_position()) {
+            ESP_LOGI(TAG, "Waiting for a GGA position from the receiver");
+            uart_nmea("$PESP,NTRIP,CLI,WAITING_GGA");
+
+            for (int seconds = 1; !receiver_has_position(); seconds++) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+
+                // Keep the Internet health in the WiFi panel current
+                if (seconds % 60 == 0) caster_ping(host);
+            }
+
+            retry_reset(delay_handle);
+        }
 
         ESP_LOGI(TAG, "Connecting to %s:%d/%s", host, port, mountpoint);
         uart_nmea("$PESP,NTRIP,CLI,CONNECTING,%s:%d,%s", host, port, mountpoint);
@@ -158,6 +270,9 @@ static void ntrip_client_task(void *ctx) {
         uart_nmea("$PESP,NTRIP,CLI,CONNECTED,%s:%d,%s", host, port, mountpoint);
 
         retry_reset(delay_handle);
+
+        // The stream proves the link, even from a caster that doesn't answer pings
+        wifi_internet_set(WIFI_INTERNET_OK, caster_ping_ms, host);
 
         rtk_status_base_reset();
 

@@ -26,6 +26,13 @@ The WiFi section will now show its connection status and IP address. Once it is 
 * http://ntrip.local/, the name the device announces with mDNS. This works on Windows 10+, macOS, iOS and most Linux desktops, while Android support varies.
 * The IP address shown in the WiFi section.
 
+#### Internet health
+The bottom of the WiFi section shows whether the device can reach the Internet, with the round-trip time and the host it checked:
+* With the NTRIP client on, it pings the caster. This needs DNS (UDP 53, unless the caster is entered as an IP address), ping (ICMP) to the caster, and the caster's own port (usually 2101). No web ports are used, so it works on networks that block browsing.
+* With the NTRIP client off, it does a web check against `connectivitycheck.gstatic.com`, then `cp.cloudflare.com`, over HTTP (TCP 80) or, if that is blocked, a plain connection on TCP 443. It checks every minute, or every 10 seconds while the Internet is down. **Login page / captive portal** means port 80 answered with a page, so the network probably wants you to sign in.
+
+Some casters and networks drop pings, all the time or now and then, in which case it shows **No ping reply from caster** until the NTRIP client connects, and **Internet** once corrections are flowing.
+
 #### The hotspot switches itself off
 When both the WiFi Hotspot and WiFi sections are enabled, the hotspot switches off 5 minutes after WiFi gets an IP address. If a device is still connected to the hotspot at that point, it waits another 5 minutes and checks again. The WiFi Hotspot section is grayed out while the hotspot is off.
 
@@ -38,6 +45,7 @@ If you are connected to the HUZZAH32's USB port with a serial terminal at 115200
 $PESP,WIFI,STA,CONNECTING,MyNetwork,P,F*23
 $PESP,WIFI,STA,CONNECTED,MyNetwork*74
 $PESP,WIFI,STA,IP,192.168.1.100/24,192.168.1.1*5D
+$PESP,WIFI,STA,INTERNET,OK,rtk2go.com*6A
 ```
 
 The new IP address will be the first address in the 3rd line as above, i.e. `192.168.1.100`.
@@ -82,6 +90,10 @@ _Do not enable all protocols at once. The ESP32 is not able to handle an unlimit
 Enter the caster's host, port, username and password, then press **Scan** beside Mountpoint. The device downloads the caster's sourcetable and lists its mountpoints, split into open ones and ones that need a login, so you can pick one.
 
 While the client is running, the bottom of the NTRIP client section shows the base station ID from its RTCM 1005/1006 position, the 3D, horizontal and vertical distance from the base antenna, and the age of the corrections at the receiver.
+
+The client doesn't connect until the receiver sends a GGA with a position (any fix, not older than 10 seconds), since an NTRIP mountpoint may send nothing until it gets one, and a caster may stop answering a client that keeps reconnecting. Until then the bottom of the section shows **Waiting for a GGA position from the receiver** and the serial port shows `$PESP,NTRIP,CLI,WAITING_GGA`. If the position is lost while connected and the NTRIP mountpoint stops sending, the client disconnects after 10 seconds and waits again.
+
+Before each connection attempt the client looks up and pings the caster. If the caster's name doesn't resolve after 3 tries, the client waits for the Internet instead of retrying (`$PESP,NTRIP,CLI,WAITING_INTERNET`) and connects as soon as the name resolves again. A missing ping reply doesn't stop it trying, since some networks drop pings while the caster works fine. Failed connections are retried at most a minute apart.
 
 #### LEDs
 The small color selector beside each section's toggle button sets the color of the RGB LED for that feature, so that you can keep track of its status. Setting the color to black disables the LED for that feature. Typically, a fading LED means the feature is working correctly/connected, while a blinking LED or no LED means the feature is awaiting a connection or could not connect to its target.

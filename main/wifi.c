@@ -32,6 +32,9 @@
 #include <esp_mac.h>
 #include <esp_timer.h>
 #include <mdns.h>
+#include <esp_http_client.h>
+#include <esp_transport_tcp.h>
+#include <lwip/netdb.h>
 #include "wifi.h"
 #include "config.h"
 
@@ -44,6 +47,7 @@ const int WIFI_AP_STA_CONNECTED_BIT = BIT2;
 
 static TaskHandle_t sta_status_task = NULL;
 static TaskHandle_t sta_reconnect_task = NULL;
+static TaskHandle_t internet_check_task = NULL;
 
 static status_led_handle_t status_led_ap;
 static status_led_handle_t status_led_sta;
@@ -68,6 +72,17 @@ static esp_netif_t *esp_netif_sta;
 static esp_timer_handle_t ap_disable_timer;
 static bool apsta_auto_disable_enabled = false; // true only if booted with both AP+STA active
 static bool ap_auto_disabled = false; // true while AP is off due to this feature
+
+// Internet health, from the NTRIP client pinging its caster or from the web check below when the client is off
+static wifi_internet_t internet = WIFI_INTERNET_CHECKING;
+static int internet_ms = -1;
+static char internet_host[72] = "";
+
+#define INTERNET_CHECK_TIMEOUT_MS 5000
+#define INTERNET_CHECK_OK_DELAY_MS 60000
+#define INTERNET_CHECK_FAILED_DELAY_MS 10000
+
+static const char *internet_check_hosts[] = {"connectivitycheck.gstatic.com", "cp.cloudflare.com"};
 
 static void wifi_sta_status_task(void *ctx) {
     uint8_t rssi_duty = 0;
@@ -100,6 +115,92 @@ static void wifi_sta_reconnect_task(void *ctx) {
         // Wait for next disconnect event
         vTaskSuspend(NULL);
     }
+}
+
+// HTTP 204 on port 80, or just a TCP connection on 443 for networks that block plain HTTP
+static wifi_internet_t wifi_internet_check(const char *host, int *ms, char *checked, size_t checked_len) {
+    *ms = -1;
+    strlcpy(checked, host, checked_len);
+
+    struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
+    struct addrinfo *addr = NULL;
+    if (getaddrinfo(host, NULL, &hints, &addr) != 0 || addr == NULL) return WIFI_INTERNET_NO_DNS;
+    freeaddrinfo(addr);
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/generate_204", host);
+    esp_http_client_config_t config = {
+            .url = url,
+            .timeout_ms = INTERNET_CHECK_TIMEOUT_MS,
+            .disable_auto_redirect = true // A captive portal redirects to its login page
+    };
+
+    int64_t start = esp_timer_get_time();
+    esp_http_client_handle_t http = esp_http_client_init(&config);
+    esp_err_t err = http != NULL ? esp_http_client_perform(http) : ESP_FAIL;
+    int status = err == ESP_OK ? esp_http_client_get_status_code(http) : 0;
+    if (http != NULL) esp_http_client_cleanup(http);
+
+    if (err == ESP_OK) {
+        *ms = (esp_timer_get_time() - start) / 1000;
+        snprintf(checked, checked_len, "%s:80", host);
+        return status == 204 ? WIFI_INTERNET_OK : WIFI_INTERNET_PORTAL;
+    }
+
+    start = esp_timer_get_time();
+    esp_transport_handle_t tcp = esp_transport_tcp_init();
+    int connected = esp_transport_connect(tcp, host, 443, INTERNET_CHECK_TIMEOUT_MS);
+    esp_transport_close(tcp);
+    esp_transport_destroy(tcp);
+
+    snprintf(checked, checked_len, "%s:443", host);
+    if (connected != 0) return WIFI_INTERNET_UNREACHABLE;
+
+    *ms = (esp_timer_get_time() - start) / 1000;
+    return WIFI_INTERNET_OK;
+}
+
+static void wifi_internet_check_task(void *ctx) {
+    while (true) {
+        wait_for_ip();
+
+        wifi_internet_t state = WIFI_INTERNET_CHECKING;
+        int ms = -1;
+        char checked[sizeof(internet_host)] = "";
+
+        for (int i = 0; i < sizeof(internet_check_hosts) / sizeof(internet_check_hosts[0]); i++) {
+            int result_ms;
+            char result_checked[sizeof(checked)];
+            wifi_internet_t result = wifi_internet_check(internet_check_hosts[i], &result_ms, result_checked, sizeof(result_checked));
+
+            // A login page says more than a later failure, so keep it unless another host gets through
+            if (result == WIFI_INTERNET_OK || state != WIFI_INTERNET_PORTAL) {
+                state = result;
+                ms = result_ms;
+                strlcpy(checked, result_checked, sizeof(checked));
+            }
+
+            if (state == WIFI_INTERNET_OK) break;
+        }
+
+        wifi_internet_set(state, ms, checked);
+
+        // Woken early when the station gets a new IP
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(state == WIFI_INTERNET_OK ? INTERNET_CHECK_OK_DELAY_MS : INTERNET_CHECK_FAILED_DELAY_MS));
+    }
+}
+
+void wifi_internet_set(wifi_internet_t state, int ms, const char *host) {
+    bool changed = state != internet;
+
+    internet = state;
+    internet_ms = ms;
+    strlcpy(internet_host, host, sizeof(internet_host));
+
+    if (!changed) return;
+
+    ESP_LOGI(TAG, "WIFI_STA_INTERNET: %s, host: %s", wifi_internet_name(state), host);
+    uart_nmea("$PESP,WIFI,STA,INTERNET,%s,%s", wifi_internet_name(state), host);
 }
 
 static void ap_disable_timer_callback(void *arg) {
@@ -217,6 +318,9 @@ static void handle_sta_disconnected(void *esp_netif, esp_event_base_t base, int3
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV6_BIT);
 
+    internet = WIFI_INTERNET_CHECKING;
+    internet_ms = -1;
+
     cancel_ap_disable_timer();
     reenable_ap_if_auto_disabled();
 
@@ -300,6 +404,9 @@ static void handle_sta_got_ip(void *esp_netif, esp_event_base_t base, int32_t ev
 
     xEventGroupSetBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
 
+    // Check the Internet now rather than at the next scheduled check
+    if (internet_check_task != NULL) xTaskNotifyGive(internet_check_task);
+
     schedule_ap_auto_disable();
 }
 
@@ -308,6 +415,9 @@ static void handle_sta_lost_ip(void *esp_netif, esp_event_base_t base, int32_t e
     uart_nmea("$PESP,WIFI,STA,IP_LOST");
 
     xEventGroupClearBits(wifi_event_group, WIFI_STA_GOT_IPV4_BIT);
+
+    internet = WIFI_INTERNET_CHECKING;
+    internet_ms = -1;
 
     cancel_ap_disable_timer();
     reenable_ap_if_auto_disabled();
@@ -513,6 +623,11 @@ void wifi_init() {
         xTaskCreate(wifi_sta_reconnect_task, "wifi_sta_reconnect", 4096, NULL, TASK_PRIORITY_WIFI_STATUS, &sta_reconnect_task);
         vTaskSuspend(sta_reconnect_task);
 
+        // Internet health, the NTRIP client pings its caster instead when it is on
+        if (!config_get_bool1(CONF_ITEM(KEY_CONFIG_NTRIP_CLIENT_ACTIVE))) {
+            xTaskCreate(wifi_internet_check_task, "wifi_internet", 4096, NULL, TASK_PRIORITY_WIFI_STATUS, &internet_check_task);
+        }
+
         config_color_t sta_led_color = config_get_color(CONF_ITEM(KEY_CONFIG_WIFI_STA_COLOR));
         if (sta_led_color.rgba != 0) status_led_sta = status_led_add(sta_led_color.rgba, STATUS_LED_STATIC, 500, 2000, 0);
     }
@@ -547,6 +662,9 @@ void wifi_ap_status(wifi_ap_status_t *status) {
 void wifi_sta_status(wifi_sta_status_t *status) {
     status->active = sta_active;
     status->connected = sta_connected;
+    status->internet = internet;
+    status->internet_ms = internet_ms;
+    strlcpy(status->internet_host, internet_host, sizeof(status->internet_host));
     if (!sta_connected) {
         memcpy(status->ssid, config_sta.sta.ssid, sizeof(config_sta.sta.ssid));
         return;
@@ -608,5 +726,22 @@ const char *wifi_auth_mode_name(wifi_auth_mode_t auth_mode) {
             return "WPA2_ENTERPRISE";
         default:
             return "Unknown";
+    }
+}
+
+const char *wifi_internet_name(wifi_internet_t internet) {
+    switch (internet) {
+        case WIFI_INTERNET_OK:
+            return "OK";
+        case WIFI_INTERNET_NO_DNS:
+            return "NO_DNS";
+        case WIFI_INTERNET_NO_REPLY:
+            return "NO_REPLY";
+        case WIFI_INTERNET_UNREACHABLE:
+            return "UNREACHABLE";
+        case WIFI_INTERNET_PORTAL:
+            return "PORTAL";
+        default:
+            return "CHECKING";
     }
 }

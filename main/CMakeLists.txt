@@ -22,4 +22,12 @@ idf_component_register(SRCS "f9p_config.c" "main.c"
 		"protocol/rtcm.c"
         INCLUDE_DIRS "include")
 
-spiffs_create_partition_image(www ../www FLASH_IN_PROJECT)
+# Web UI is gzipped into the firmware, so one OTA updates both
+file(GLOB WWW_FILES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../www/*)
+set(WWW_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/www_files.c)
+idf_build_get_property(python PYTHON)
+add_custom_command(OUTPUT ${WWW_SOURCE}
+        COMMAND ${python} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/www_embed.py ${WWW_SOURCE} ${WWW_FILES}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../tools/www_embed.py ${WWW_FILES}
+        VERBATIM)
+target_sources(${COMPONENT_LIB} PRIVATE ${WWW_SOURCE})

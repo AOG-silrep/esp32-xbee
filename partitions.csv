@@ -4,5 +4,6 @@ otadata,  data, ota,     ,        0x2000,
 phy_init, data, phy,     ,        0x1000,
 ota_0,    app,  ota_0,   ,        1280K,
 ota_1,    app,  ota_1,   ,        1280K,
+# www is unused, the web UI is built into the app. Kept so OTA-updated devices keep the same layout.
 www,      data, spiffs,  ,        1M,
 coredump, data, coredump,,        192k,

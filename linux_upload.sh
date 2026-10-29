@@ -9,5 +9,4 @@ esptool --chip esp32 -p "$PORT" -b 460800 \
   0x1000  bootloader.bin \
   0x8000  partition-table.bin \
   0xf000  ota_data_initial.bin \
-  0x20000 esp32-xbee.bin \
-  0x2a0000 www.bin
+  0x20000 esp32-xbee.bin

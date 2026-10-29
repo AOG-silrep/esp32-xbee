@@ -38,6 +38,10 @@ static const char *TAG = "RTK_STATUS";
 #define REPORT_INTERVAL_MS 5000
 #define REPORT_MAX_AGE 10.0
 
+// A GNSS system counts towards the satellites used while its GSA is this close to the newest GSA,
+// longer than the GSA period so a read between two systems' sentences keeps the previous epoch's count
+#define GSA_SYSTEM_WINDOW_US 2000000
+
 typedef struct rtk_state {
     bool base_valid;
     rtcm_station_t base;
@@ -54,6 +58,10 @@ typedef struct rtk_state {
     bool gsa_valid;
     nmea_gsa_t gsa;
     int64_t gsa_time;
+
+    // Satellites used from each GNSS system's latest GSA, indexed by system ID
+    int gsa_satellites[NMEA_GSA_SYSTEM_MAX + 1];
+    int64_t gsa_satellites_time[NMEA_GSA_SYSTEM_MAX + 1];
 } rtk_state_t;
 
 static bool initialized = false;
@@ -149,11 +157,17 @@ static void rtk_status_nmea_parse(const char *line) {
         state.gst_time = time;
         taskEXIT_CRITICAL(&state_lock);
     } else if (nmea_parse_gsa(line, &gsa)) {
-        // One GSA per GNSS in multi-GNSS operation, the latest wins
+        // One GSA per GNSS in multi-GNSS operation, the latest wins for DOP, satellites are kept per system
+        bool system_valid = gsa.system_id >= 0 && gsa.system_id <= NMEA_GSA_SYSTEM_MAX;
+
         taskENTER_CRITICAL(&state_lock);
         state.gsa = gsa;
         state.gsa_valid = true;
         state.gsa_time = time;
+        if (system_valid) {
+            state.gsa_satellites[gsa.system_id] = gsa.satellites;
+            state.gsa_satellites_time[gsa.system_id] = time;
+        }
         taskEXIT_CRITICAL(&state_lock);
     }
 }
@@ -182,6 +196,15 @@ bool rtk_status_get(rtk_status_t *status) {
             .gsa = snapshot.gsa,
             .gsa_age = (now - snapshot.gsa_time) / 1e6
     };
+
+    // GGA reports at most 12 satellites, the per-system GSAs list every one used
+    for (int system = 0; system <= NMEA_GSA_SYSTEM_MAX; system++) {
+        bool current = snapshot.gsa_valid && snapshot.gsa_satellites_time[system] != 0 &&
+                snapshot.gsa_time - snapshot.gsa_satellites_time[system] <= GSA_SYSTEM_WINDOW_US;
+
+        status->gsa_satellites_by_system[system] = current ? snapshot.gsa_satellites[system] : -1;
+        if (current) status->gsa_satellites += snapshot.gsa_satellites[system];
+    }
 
     const nmea_gga_t *gga = &snapshot.gga;
     if (!snapshot.base_valid || !snapshot.gga_valid || gga->fix_quality == 0 || isnan(gga->latitude) ||
@@ -233,6 +256,7 @@ static void rtk_status_report(rtcm_station_t *logged_base, bool *logged_base_val
     if (!status.distance_valid || status.gga_age > REPORT_MAX_AGE) return;
 
     bool gst = status.gst_valid && status.gst_age <= REPORT_MAX_AGE;
+    bool gsa = status.gsa_valid && status.gsa_age <= REPORT_MAX_AGE;
 
     char hdop[24], correction_age[24], sigma_latitude[24], sigma_longitude[24], sigma_altitude[24];
     format_optional(hdop, sizeof(hdop), status.gga.hdop, 2);
@@ -244,7 +268,7 @@ static void rtk_status_report(rtcm_station_t *logged_base, bool *logged_base_val
     // Station, distance 3D/horizontal/vertical, fix quality, satellites, HDOP, correction age, sigma lat/lon/alt
     uart_nmea("$PESP,NTRIP,CLI,BASE,%d,%.3f,%.3f,%.3f,%d,%d,%s,%s,%s,%s,%s",
             status.base.station_id, status.distance_3d, status.distance_horizontal, status.distance_vertical,
-            status.gga.fix_quality, status.gga.satellites, hdop, correction_age,
+            status.gga.fix_quality, gsa ? status.gsa_satellites : status.gga.satellites, hdop, correction_age,
             sigma_latitude, sigma_longitude, sigma_altitude);
 }
 

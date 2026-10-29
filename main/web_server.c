@@ -625,6 +625,15 @@ static void rtk_status_json(cJSON *root) {
     if (status.gsa_valid) {
         cJSON *gsa = cJSON_AddObjectToObject(rtk, "gsa");
         json_add_number_if_valid(gsa, "vdop", status.gsa.vdop);
+        cJSON_AddNumberToObject(gsa, "sats", status.gsa_satellites);
+        cJSON *systems = cJSON_AddObjectToObject(gsa, "systems");
+        for (int system = 0; system <= NMEA_GSA_SYSTEM_MAX; system++) {
+            if (status.gsa_satellites_by_system[system] < 0) continue;
+
+            char system_id[4];
+            snprintf(system_id, sizeof(system_id), "%d", system);
+            cJSON_AddNumberToObject(systems, system_id, status.gsa_satellites_by_system[system]);
+        }
         cJSON_AddNumberToObject(gsa, "age", status.gsa_age);
     }
 

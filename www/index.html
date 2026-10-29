@@ -382,6 +382,8 @@
             var RTK_BASE_STALE_SECONDS = 120;
 
             var gpsFixNames = ['No fix', 'GPS', 'DGPS', 'PPS', 'RTK fixed', 'RTK float', 'Dead reckoning', 'Manual', 'Simulation'];
+            // GSA system IDs (NMEA 4.10+), 0 when the receiver doesn't give one
+            var gnssNames = ['GNSS', 'GPS', 'GLONASS', 'Galileo', 'BeiDou', 'QZSS', 'NavIC'];
 
             var gpsFixColorClass = function(fix) {
                 if (fix === 4) {
@@ -418,7 +420,7 @@
             // Hide the card footer holding the element when there is nothing to show
             var toggleFooter = (element) => element.closest('.card-footer').toggle(element.children().length > 0);
 
-            // Receiver status from its own GGA/GST on the UART
+            // Receiver status from its own GGA/GSA/GST on the UART
             var uartGpsUpdate = function(rtk) {
                 uartGpsText.empty();
 
@@ -426,15 +428,16 @@
                     var rover = rtk.rover;
                     var gst = rtk.gst;
                     var gsa = rtk.gsa;
+                    var roverStale = rover && isStale(rover.age, RTK_STALE_SECONDS);
+
+                    // Second line, the satellites used
+                    var satellites = $('<span>');
 
                     if (!rover) {
                         addPart(uartGpsText, 'No GGA from receiver', 'muted');
                     } else {
-                        var roverStale = isStale(rover.age, RTK_STALE_SECONDS);
-
                         addPart(uartGpsText, (gpsFixNames[rover.fix] || ('Fix ' + rover.fix)) + staleSuffix(rover.age, RTK_STALE_SECONDS),
                             gpsFixColorClass(rover.fix), roverStale);
-                        addPart(uartGpsText, rover.sats + ' sats', null, roverStale);
                         if (typeof rover.hdop !== 'undefined') {
                             addPart(uartGpsText, 'HDOP ' + rover.hdop.toFixed(2), null, roverStale);
                         }
@@ -450,6 +453,16 @@
                             staleSuffix(gst.age, RTK_STALE_SECONDS), null, isStale(gst.age, RTK_STALE_SECONDS),
                             '1-sigma error latitude / longitude / altitude (GST)');
                     }
+
+                    // GGA reports at most 12, the GSA per GNSS system lists every satellite used
+                    if (gsa && typeof gsa.sats !== 'undefined' && !isStale(gsa.age, RTK_STALE_SECONDS)) {
+                        addPart(satellites, gsa.sats + ' sats', null, false, 'Satellites used (GSA)');
+                        Object.keys(gsa.systems || {}).forEach(id => addPart(satellites, (gnssNames[id] || ('System ' + id)) + ' ' + gsa.systems[id]));
+                    } else if (rover) {
+                        addPart(satellites, rover.sats + ' sats', null, roverStale, 'Satellites used (GGA, the receiver reports at most 12)');
+                    }
+
+                    if (satellites.children().length > 0) uartGpsText.append($('<br>'), satellites);
                 }
 
                 toggleFooter(uartGpsText);

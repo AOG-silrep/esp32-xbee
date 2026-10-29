@@ -26,6 +26,8 @@ typedef struct rtk_status {
     bool gsa_valid;
     nmea_gsa_t gsa;
     double gsa_age;
+    int gsa_satellites; // Satellites used, summed over the GNSS systems' latest GSAs
+    int gsa_satellites_by_system[NMEA_GSA_SYSTEM_MAX + 1]; // Indexed by GSA system ID, -1 if not reported
 
     // Rover relative to base, in the base's local east/north/up frame
     bool distance_valid;

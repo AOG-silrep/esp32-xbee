@@ -154,10 +154,17 @@ bool nmea_parse_gsa(const char *sentence, nmea_gsa_t *gsa) {
     int count = nmea_split(sentence, "GSA", copy, sizeof(copy), fields, NMEA_MAX_FIELDS);
     if (count < 18) return false;
 
+    int satellites = 0;
+    for (int i = 3; i <= 14; i++) {
+        if (fields[i][0] != '\0') satellites++;
+    }
+
     *gsa = (nmea_gsa_t) {
             .pdop = nmea_field_double(fields[15]),
             .hdop = nmea_field_double(fields[16]),
-            .vdop = nmea_field_double(fields[17])
+            .vdop = nmea_field_double(fields[17]),
+            .satellites = satellites,
+            .system_id = count > 18 ? atoi(fields[18]) : 0
     };
 
     return true;

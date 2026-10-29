@@ -22,10 +22,15 @@ typedef struct nmea_gst {
     double sigma_altitude;
 } nmea_gst_t;
 
+// NMEA 4.10+ GSA system ID: 1 GPS, 2 GLONASS, 3 Galileo, 4 BeiDou, 5 QZSS, 6 NavIC
+#define NMEA_GSA_SYSTEM_MAX 6
+
 typedef struct nmea_gsa {
     double pdop; // NAN if empty
     double hdop;
     double vdop;
+    int satellites; // SV IDs used in the solution, at most 12 per sentence
+    int system_id; // 0 if not given (before NMEA 4.10)
 } nmea_gsa_t;
 
 int nmea_asprintf(char **strp, const char *fmt, ...);

@@ -12,13 +12,7 @@
         }
     </style>
     <script>
-        const LOG_PAGE_INDEX_KEY = 'log_page_index';
-
         $(function() {
-            var log_page_index = localStorage.getItem(LOG_PAGE_INDEX_KEY) || 0;
-            log_page_index++;
-            localStorage.setItem(LOG_PAGE_INDEX_KEY, log_page_index);
-
             var table = $("#table");
             var tbody = table.find('tbody');
 
@@ -26,18 +20,39 @@
 
             var index = 1;
 
+            // The device keeps its log, each request asks for what follows the last one
+            var since = 0;
+            var boot = null;
+
             var update = function() {
-                // Don't reload if another page is open
-                if (localStorage.getItem(LOG_PAGE_INDEX_KEY) > log_page_index) {
-                    console.log("Disabling due to other page");
-                    $('#reload-modal').modal({backdrop: 'static', keyboard: false});
-                    return;
-                }
+                var delay = 2500;
 
                 $.ajax({
-                    url: 'log',
+                    url: 'log?since=' + since,
                     timeout: 2000
-                }).done(function(data) {
+                }).done(function(data, status, xhr) {
+                    var newBoot = xhr.getResponseHeader('X-Log-Boot');
+                    if (boot !== null && newBoot !== boot) {
+                        // Device restarted, read its new log from the beginning
+                        boot = newBoot;
+                        since = 0;
+                        delay = 0;
+                        return;
+                    }
+                    boot = newBoot;
+
+                    var start = parseInt(xhr.getResponseHeader('X-Log-Start'));
+                    var end = parseInt(xhr.getResponseHeader('X-Log-End'));
+                    var head = parseInt(xhr.getResponseHeader('X-Log-Head'));
+
+                    if (start > since) {
+                        tbody.append($("<tr class='table-secondary'></tr>")
+                            .append($("<td colspan='5'>Earlier lines are no longer held by the device</td>")));
+                    }
+
+                    since = end;
+                    if (end < head) delay = 0;
+
                     var lines = data.split("\n");
                     window.lines = lines;
 
@@ -92,7 +107,7 @@
                         tbody.append(row);
                     }
                 }).always(function() {
-                    setTimeout(update, 2500);
+                    setTimeout(update, delay);
                 });
             };
 
@@ -121,18 +136,6 @@
 
                 </tbody>
             </table>
-        </div>
-    </div>
-    <div class="modal fade" id="reload-modal" tabindex="-1" role="dialog">
-        <div class="modal-dialog modal-dialog-centered" role="document">
-            <div class="modal-content">
-                <div class="modal-body">
-                    <p>Another log page has been opened in a different window/tab. To avoid both pages competing for the log from the device, please switch to the most recently opened log tab, or reload this page.</p>
-                </div>
-                <div class="modal-footer">
-                    <a href="javascript:location.reload()" class="btn btn-success">Reload</a>
-                </div>
-            </div>
         </div>
     </div>
 </body>

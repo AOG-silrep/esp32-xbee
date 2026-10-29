@@ -182,19 +182,32 @@ static esp_err_t check_auth(httpd_req_t *req) {
 static esp_err_t log_get_handler(httpd_req_t *req) {
     if (check_auth(req) == ESP_FAIL) return ESP_FAIL;
 
-    httpd_resp_set_type(req, "text/plain");
-
-    size_t length;
-    void *log_data = log_receive(&length, 1);
-    if (log_data == NULL) {
-        httpd_resp_sendstr(req, "");
-
-        return ESP_OK;
+    // Clients ask for the log from the offset they have read up to, so each one gets the full history
+    uint32_t since = 0;
+    char query[64], value[11];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+            httpd_query_key_value(query, "since", value, sizeof(value)) == ESP_OK) {
+        since = strtoul(value, NULL, 10);
     }
 
-    httpd_resp_send(req, log_data, length);
+    uint32_t start, end, head, boot_id;
+    size_t length = log_read(since, buffer, BUFFER_SIZE, &start, &end, &head, &boot_id);
 
-    log_return(log_data);
+    // Header values must stay valid until the response is sent
+    char start_str[11], end_str[11], head_str[11], boot_str[11];
+    snprintf(start_str, sizeof(start_str), "%" PRIu32, start);
+    snprintf(end_str, sizeof(end_str), "%" PRIu32, end);
+    snprintf(head_str, sizeof(head_str), "%" PRIu32, head);
+    snprintf(boot_str, sizeof(boot_str), "%" PRIu32, boot_id);
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Log-Boot", boot_str);
+    httpd_resp_set_hdr(req, "X-Log-Start", start_str);
+    httpd_resp_set_hdr(req, "X-Log-End", end_str);
+    httpd_resp_set_hdr(req, "X-Log-Head", head_str);
+
+    httpd_resp_send(req, buffer, length);
 
     return ESP_OK;
 }

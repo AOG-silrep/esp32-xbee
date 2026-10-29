@@ -45,8 +45,18 @@
         }
     </style>
     <script>
-        const releases_api_url = 'https://api.github.com/repos/nebkat/esp32-xbee/releases';
-        const releases_html_url = 'https://github.com/nebkat/esp32-xbee/releases';
+        const releases_api_url = 'https://api.github.com/repos/AOG-silrep/esp32-xbee/releases';
+        const releases_html_url = 'https://github.com/AOG-silrep/esp32-xbee/releases';
+
+        // 'v0.6.10' -> [0, 6, 10], compared part by part so that v0.6.10 > v0.6.4
+        const parseVersion = (tag) => tag.replace(/[^\d.]/g, '').split('.').filter(part => part.length).map(Number);
+        const compareVersions = function(a, b) {
+            for (let i = 0; i < Math.max(a.length, b.length); i++) {
+                const diff = (a[i] || 0) - (b[i] || 0);
+                if (diff !== 0) return diff;
+            }
+            return 0;
+        };
 
         $.fn.serializeObject = function() {
             var o = {};
@@ -227,17 +237,17 @@
                 projectVersionText.text(data.version);
 
                 if (data.version.includes('-')) data.version = data.version.substring(0, data.version.indexOf('-'));
-                let current_version = parseFloat("0." + data.version.replace(/[^\d]/g, ""));
+                let current_version = parseVersion(data.version);
                 $.getJSON(releases_api_url, function(data) {
                     if (!(data instanceof Array)) return;
 
-                    let latest_version = 0;
+                    let latest_version = [];
                     let release_url = null;
-                    let latest_version_prerelease = 0;
+                    let latest_version_prerelease = null;
                     let prerelease_url = null;
                     for (const release of data) {
-                        let version = parseFloat("0." + release.tag_name.replace(/[^\d]/g, ""));
-                        if (release.prerelease && latest_version_prerelease === 0) {
+                        let version = parseVersion(release.tag_name);
+                        if (release.prerelease && latest_version_prerelease === null) {
                             latest_version_prerelease = version;
                             prerelease_url = release.html_url;
                             continue;
@@ -250,19 +260,22 @@
                     projectVersionText.attr('href', release_url)
                         .removeClass('text-muted');
 
-                    if (latest_version === current_version) {
+                    const latest_compare = compareVersions(latest_version, current_version);
+                    if (latest_compare === 0) {
                         projectVersionText.addClass('text-success')
                             .appendText(' (latest)');
-                    } else if (latest_version > current_version) {
+                    } else if (latest_compare > 0) {
                         projectVersionText.addClass('text-warning')
                             .appendText(" (old)");
-                    } else if (latest_version < current_version) {
+                    } else {
                         projectVersionText.attr('href', releases_html_url)
                             .addClass('text-primary')
                             .appendText(' (dev)');
                     }
 
-                    if (latest_version_prerelease > Math.max(latest_version, current_version)) {
+                    if (latest_version_prerelease !== null &&
+                            compareVersions(latest_version_prerelease, latest_version) > 0 &&
+                            compareVersions(latest_version_prerelease, current_version) > 0) {
                         $('#prerelease-available').attr('href', prerelease_url).show();
                     }
                 });
@@ -1013,7 +1026,7 @@
 <body class="bg-light">
     <div class="container">
         <div class="pt-5 text-center">
-            <h2>ESP32 XBee Config <a id="project-version" href="https://github.com/nebkat/esp32-xbee/releases" class="text-muted small"></a> <a id="prerelease-available" class="text-info small" style="display: none">(beta available)</a></h2>
+            <h2>ESP32 XBee Config <a id="project-version" href="https://github.com/AOG-silrep/esp32-xbee/releases" class="text-muted small"></a> <a id="prerelease-available" class="text-info small" style="display: none">(beta available)</a></h2>
 
             <p class="lead">Adjust the settings below and then click on "Submit". The device will restart with the new settings applied. If you have adjusted WiFi settings the device may be moved onto a new IP address, or require you to reconnect to its access point.</p>
         </div>
@@ -1880,7 +1893,7 @@
     <footer id="footer" class="bg-dark">
         <div class="container">
             <div class="text-center text-light">
-                <small>&copy; <a href="http://cvetkovic.ie" class="text-white">Neboj&#353;a Cvetkovi&#263;</a> 2020 - <a href="https://github.com/nebkat" class="text-white">GitHub</a> - <a href="https://github.com/nebkat/esp32-xbee" class="text-white">Project</a></small>
+                <small>&copy; <a href="http://cvetkovic.ie" class="text-white">Neboj&#353;a Cvetkovi&#263;</a> 2020 - <a href="https://github.com/nebkat/esp32-xbee" class="text-white">Original</a> - <a href="https://github.com/AOG-silrep/esp32-xbee" class="text-white">Project</a></small>
             </div>
         </div>
     </footer>

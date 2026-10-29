@@ -93,18 +93,18 @@ void app_main()
 
     uart_nmea("$PESP,INIT,START,%s,%s", app_desc->version, reset_reason_name(reset_reason));
 
-    ESP_LOGI(TAG, "╔══════════════════════════════════════════════╗");
-    ESP_LOGI(TAG, "║ ESP32 XBee %-33s "                          "║", app_desc->version);
-    ESP_LOGI(TAG, "╠══════════════════════════════════════════════╣");
-    ESP_LOGI(TAG, "║ Compiled: %8s %-25s "                       "║", app_desc->time, app_desc->date);
-    ESP_LOGI(TAG, "║ ELF SHA256: %-32s "                         "║", elf_buffer);
-    ESP_LOGI(TAG, "║ ESP-IDF: %-35s "                            "║", app_desc->idf_ver);
-    ESP_LOGI(TAG, "╟──────────────────────────────────────────────╢");
-    ESP_LOGI(TAG, "║ Reset reason: %-30s "                       "║", reset_reason_name(reset_reason));
-    ESP_LOGI(TAG, "╟──────────────────────────────────────────────╢");
-    ESP_LOGI(TAG, "║ Author: Nebojša Cvetković                    ║");
-    ESP_LOGI(TAG, "║ Source: https://github.com/nebkat/esp32-xbee ║");
-    ESP_LOGI(TAG, "╚══════════════════════════════════════════════╝");
+    ESP_LOGI(TAG, "╔══════════════════════════════════════════════════╗");
+    ESP_LOGI(TAG, "║ ESP32 XBee %-37s "                          "║", app_desc->version);
+    ESP_LOGI(TAG, "╠══════════════════════════════════════════════════╣");
+    ESP_LOGI(TAG, "║ Compiled: %8s %-29s "                       "║", app_desc->time, app_desc->date);
+    ESP_LOGI(TAG, "║ ELF SHA256: %-36s "                         "║", elf_buffer);
+    ESP_LOGI(TAG, "║ ESP-IDF: %-39s "                            "║", app_desc->idf_ver);
+    ESP_LOGI(TAG, "╟──────────────────────────────────────────────────╢");
+    ESP_LOGI(TAG, "║ Reset reason: %-34s "                       "║", reset_reason_name(reset_reason));
+    ESP_LOGI(TAG, "╟──────────────────────────────────────────────────╢");
+    ESP_LOGI(TAG, "║ Author: Nebojša Cvetković                        ║");
+    ESP_LOGI(TAG, "║ Source: https://github.com/AOG-silrep/esp32-xbee ║");
+    ESP_LOGI(TAG, "╚══════════════════════════════════════════════════╝");
 
     esp_event_loop_create_default();
 
